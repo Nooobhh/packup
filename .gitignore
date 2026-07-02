@@ -16,3 +16,6 @@ out/
 
 # 管线中间产物与生成的行程(本地数据)
 data/
+
+# Claude Code worktrees
+.claude/worktrees/
