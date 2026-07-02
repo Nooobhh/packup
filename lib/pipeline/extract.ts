@@ -36,7 +36,7 @@ async function extractOne(note: Note, input: TripInput, llm: LLMRunner) {
         prompt: buildExtractPrompt(note, input, validationError),
         images: note.images,
         jsonSchema: extractJsonSchema,
-        timeoutMs: 120_000
+        timeoutMs: 300_000
       });
     } catch (error) {
       return { pois: [], filtered: [], failed: { noteId: note.id, reason: error instanceof Error ? error.message : String(error) } };

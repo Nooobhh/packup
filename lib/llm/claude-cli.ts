@@ -31,7 +31,7 @@ export class ClaudeCliRunner implements LLMRunner {
       const result = await this.execClaude(args, { timeoutMs: opts.timeoutMs });
       return unwrapClaudeJson(result.stdout);
     } catch (error) {
-      if (isTimeout(error)) throw new LLMTimeoutError(error instanceof Error ? error.message : undefined);
+      if (isTimeout(error)) throw new LLMTimeoutError(`claude CLI timed out after ${opts.timeoutMs}ms`);
       const stderr = typeof error === "object" && error && "stderr" in error ? String((error as { stderr?: unknown }).stderr ?? "") : "";
       if (stderr.trim()) throw new Error(stderr.trim());
       throw error;
