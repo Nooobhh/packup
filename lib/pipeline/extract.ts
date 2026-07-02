@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { LLMRunner } from "@/lib/llm/types";
 import { buildExtractPrompt } from "@/lib/prompts/extract";
 import type { CandidatePoi, FilteredItem, Note, TripInput } from "./types";
@@ -6,14 +7,23 @@ import { CandidatePoiSchema, FilteredItemSchema } from "./types";
 export async function runExtract(
   notes: Note[],
   input: TripInput,
-  llm: LLMRunner
+  llm: LLMRunner,
+  opts: { workDir?: string } = {}
 ): Promise<{ pois: CandidatePoi[]; filtered: FilteredItem[]; failedNotes: { noteId: string; reason: string }[] }> {
   const okNotes = notes.filter((note) => note.fetchStatus === "ok");
-  const results = await mapLimit(okNotes, 3, (note) => extractOne(note, input, llm));
+  const results = await mapLimit(okNotes, 3, (note) => extractOne(resolveNoteImages(note, opts.workDir), input, llm));
   return {
     pois: results.flatMap((result) => result.pois),
     filtered: results.flatMap((result) => result.filtered),
     failedNotes: results.flatMap((result) => result.failed ? [result.failed] : [])
+  };
+}
+
+function resolveNoteImages(note: Note, workDir?: string): Note {
+  if (!workDir) return note;
+  return {
+    ...note,
+    images: note.images.map((image) => (path.isAbsolute(image) ? image : path.resolve(workDir, image)))
   };
 }
 

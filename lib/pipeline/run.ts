@@ -114,7 +114,7 @@ async function runFetch(input: TripInput, fetcher: ContentFetcher, workDir: stri
 
 async function runExtractStage(input: TripInput, llm: LLMRunner, workDir: string) {
   const notes = NoteSchema.array().parse(await readJson(path.join(workDir, outputFiles.fetch)));
-  const output = await runExtract(notes, input, llm);
+  const output = await runExtract(notes, input, llm, { workDir });
   await writeJson(path.join(workDir, outputFiles.extract), ExtractOutputSchema.parse(output));
 }
 

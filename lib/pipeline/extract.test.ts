@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import path from "node:path";
 import type { LLMRunner } from "@/lib/llm/types";
 import { buildExtractPrompt } from "@/lib/prompts/extract";
 import { runExtract } from "./extract";
@@ -23,11 +24,12 @@ describe("runExtract", () => {
       .mockResolvedValueOnce(JSON.stringify({ pois: [poi("外滩", "n1", "text")], filtered: [] }))
       .mockResolvedValueOnce(JSON.stringify({ pois: [poi("武康路", "n2", "image")], filtered: [] }));
 
-    const result = await runExtract([note("n1", ["a.jpg"]), note("n2", ["b.jpg"], "")], input, { run });
+    const workDir = path.join(process.cwd(), "data/trips/trip-test");
+    const result = await runExtract([note("n1", ["a.jpg"]), note("n2", ["b.jpg"], "")], input, { run }, { workDir });
 
     expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[0][0].images).toEqual(["a.jpg"]);
-    expect(run.mock.calls[1][0].images).toEqual(["b.jpg"]);
+    expect(run.mock.calls[0][0].images).toEqual([path.join(workDir, "a.jpg")]);
+    expect(run.mock.calls[1][0].images).toEqual([path.join(workDir, "b.jpg")]);
     expect(result.pois.map((item) => item.name)).toEqual(["外滩", "武康路"]);
   });
 
