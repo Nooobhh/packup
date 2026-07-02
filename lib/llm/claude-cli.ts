@@ -41,13 +41,28 @@ export class ClaudeCliRunner implements LLMRunner {
 
 function defaultExecClaude(args: string[], options: { timeoutMs: number }): Promise<{ stdout: string; stderr?: string }> {
   return new Promise((resolve, reject) => {
-    const child = execFile("claude", args, { timeout: options.timeoutMs, maxBuffer: 20 * 1024 * 1024 }, (error, stdout, stderr) => {
-      if (error) {
-        reject(Object.assign(error, { stderr, timedOut: Boolean((error as NodeJS.ErrnoException & { killed?: boolean }).killed) }));
-        return;
+    // 用 AbortController + SIGKILL 硬超时:execFile 内置 timeout 发 SIGTERM,
+    // 但 claude CLI 优雅关闭时会挂起忽略 SIGTERM,故到点直接 SIGKILL 强杀。
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, options.timeoutMs);
+
+    const child = execFile(
+      "claude",
+      args,
+      { signal: controller.signal, killSignal: "SIGKILL", maxBuffer: 20 * 1024 * 1024 },
+      (error, stdout, stderr) => {
+        clearTimeout(timer);
+        if (error) {
+          reject(Object.assign(error, { stderr, timedOut: timedOut || Boolean((error as NodeJS.ErrnoException & { killed?: boolean }).killed) }));
+          return;
+        }
+        resolve({ stdout, stderr });
       }
-      resolve({ stdout, stderr });
-    });
+    );
     // 立即关 stdin,避免 claude -p 等待 stdin 3 秒
     child.stdin?.end();
   });

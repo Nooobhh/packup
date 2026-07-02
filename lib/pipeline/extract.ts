@@ -81,7 +81,32 @@ const extractJsonSchema = {
   type: "object",
   required: ["pois", "filtered"],
   properties: {
-    pois: { type: "array" },
-    filtered: { type: "array" }
+    pois: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["name", "type", "reason", "sourceType"],
+        properties: {
+          name: { type: "string", description: "地点/店铺名称" },
+          type: { type: "string", enum: ["sight", "food", "shop", "stay", "experience", "other"] },
+          city: { type: "string", description: "所属城市,不确定留空" },
+          reason: { type: "string", description: "推荐理由,保留笔记原文口吻" },
+          suggestedDuration: { type: "string" },
+          timeHint: { type: "string" },
+          sourceType: { type: "string", enum: ["text", "image"] }
+        }
+      }
+    },
+    filtered: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["name", "why"],
+        properties: {
+          name: { type: "string" },
+          why: { type: "string", description: "被过滤原因" }
+        }
+      }
+    }
   }
 };
