@@ -92,6 +92,14 @@ function loadAmapSdk(key: string): Promise<AMapApi> {
   const existingAmap = (globalThis as typeof globalThis & { AMap?: AMapApi }).AMap;
   if (existingAmap) return Promise.resolve(existingAmap);
 
+  // 高德 JS API 2.0 要求安全密钥,须在 SDK script 加载前挂到全局
+  const securityCode = process.env.NEXT_PUBLIC_AMAP_SECURITY_CODE;
+  if (securityCode) {
+    (globalThis as typeof globalThis & { _AMapSecurityConfig?: object })._AMapSecurityConfig = {
+      securityJsCode: securityCode
+    };
+  }
+
   const scriptId = "amap-js-sdk";
   const existingScript = document.getElementById(scriptId) as HTMLScriptElement | null;
   return new Promise((resolve, reject) => {
