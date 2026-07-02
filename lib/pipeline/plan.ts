@@ -80,13 +80,48 @@ async function callPlanner(
       timeoutMs: 600_000
     });
     try {
-      return TripPlanSchema.parse(JSON.parse(raw));
+      return rehydratePlanItems(TripPlanSchema.parse(JSON.parse(raw)), grounded);
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
       if (attempt === 1) throw error;
     }
   }
   throw new Error("unreachable planner retry state");
+}
+
+function rehydratePlanItems(plan: TripPlan, grounded: GroundedPoi[]) {
+  const byAmapId = new Map(grounded.filter((poi) => poi.amapId).map((poi) => [poi.amapId as string, poi]));
+  const byName = new Map(grounded.map((poi) => [poi.name, poi]));
+  const warnings = new Set(plan.warnings);
+
+  for (const day of plan.days) {
+    const kept: PlanItem[] = [];
+    for (const item of day.items) {
+      const amapId = item.poiId ?? item.poi?.amapId;
+      const name = item.name ?? item.poi?.name;
+      const source = (amapId ? byAmapId.get(amapId) : undefined) ?? (name ? byName.get(name) : undefined);
+      if (!source) {
+        warnings.add(`排程输出包含未经核实的条目已剔除: ${itemName(item)}`);
+        continue;
+      }
+      kept.push({
+        ...item,
+        poiId: source.amapId ?? source.id ?? item.poiId,
+        poi: source,
+        name: source.name,
+        type: source.type,
+        address: source.address,
+        openHours: source.openHours,
+        verified: source.verified,
+        location: source.location,
+        reason: source.reason
+      });
+    }
+    day.items = kept;
+  }
+
+  plan.warnings = Array.from(warnings);
+  return plan;
 }
 
 async function fillAdjacentRoutes(plan: TripPlan, input: TripInput, map: MapProvider) {
@@ -278,7 +313,31 @@ const planJsonSchema = {
   type: "object",
   required: ["days", "filtered", "warnings"],
   properties: {
-    days: { type: "array" },
+    days: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["items"],
+        properties: {
+          index: { type: "number" },
+          day: { type: "number" },
+          date: { type: "string" },
+          theme: { type: "string" },
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["name", "startTime", "durationMin"],
+              properties: {
+                name: { type: "string" },
+                startTime: { type: "string" },
+                durationMin: { type: "number" }
+              }
+            }
+          }
+        }
+      }
+    },
     filtered: { type: "array" },
     warnings: { type: "array" },
     daysDecision: {}

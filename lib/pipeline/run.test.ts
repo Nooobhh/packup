@@ -2,14 +2,18 @@ import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { XhsCliFetcher } from "@/lib/fetchers/xhs-cli";
+import { XhsHttpFetcher } from "@/lib/fetchers/xhs-http";
 import type { ContentFetcher } from "@/lib/fetchers/types";
 import type { LLMRunner } from "@/lib/llm/types";
 import type { MapProvider } from "@/lib/map/types";
 import { GroundOutputSchema, NoteSchema, TripPlanSchema, type StageEvent, type TripInput } from "./types";
-import { runPipeline } from "./run";
+import { createDefaultPipelineDeps, runPipeline } from "./run";
 
 let dataRoot: string;
 const oldEnv = process.env.PACKUP_DATA_DIR;
+const oldAmapKey = process.env.AMAP_REST_KEY;
+const oldFetcher = process.env.PACKUP_FETCHER;
 
 beforeEach(async () => {
   dataRoot = await mkdtemp(path.join(os.tmpdir(), "pipeline-run-"));
@@ -18,6 +22,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   process.env.PACKUP_DATA_DIR = oldEnv;
+  process.env.AMAP_REST_KEY = oldAmapKey;
+  process.env.PACKUP_FETCHER = oldFetcher;
   await rm(dataRoot, { recursive: true, force: true });
 });
 
@@ -99,6 +105,15 @@ describe("runPipeline", () => {
     expect(deps.fetcher.fetch).not.toHaveBeenCalled();
     expect(JSON.parse(await readFile(path.join(dir, "20-pois.json"), "utf8")).pois[0].name).toBe("外滩");
     expect(JSON.parse(await readFile(path.join(dir, "40-plan.json"), "utf8")).days[0].items[0].name).toBe("外滩");
+  });
+
+  it("uses the unauthenticated HTTP fetcher by default and allows cli fallback via env", () => {
+    process.env.AMAP_REST_KEY = "amap-test-key";
+    delete process.env.PACKUP_FETCHER;
+    expect(createDefaultPipelineDeps(undefined, input).fetcher).toBeInstanceOf(XhsHttpFetcher);
+
+    process.env.PACKUP_FETCHER = "cli";
+    expect(createDefaultPipelineDeps(undefined, input).fetcher).toBeInstanceOf(XhsCliFetcher);
   });
 });
 

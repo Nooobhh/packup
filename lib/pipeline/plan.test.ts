@@ -106,6 +106,48 @@ describe("runPlan", () => {
     expect(floating.days.length).toBeGreaterThanOrEqual(1);
     expect(floating.days.length).toBeLessThanOrEqual(3);
   });
+
+  it("removes hallucinated plan items that are not present in grounded input", async () => {
+    const grounded = [gp("真实地点", 1, 1)];
+    const plan = planWithItems([grounded[0]]);
+    plan.days[0].items.push({
+      name: "LLM编造地点",
+      type: "sight",
+      startTime: "10:00",
+      durationMin: 60,
+      verified: true,
+      location: { lng: 9, lat: 9 },
+      address: "不存在地址"
+    });
+    const result = await runPlan(grounded, [], input, { run: vi.fn().mockResolvedValue(JSON.stringify(plan)) }, mapWithRoute(async () => ({ durationMin: 5, distanceKm: 1 })));
+
+    expect(result.days[0].items.map((item) => item.name)).toEqual(["真实地点"]);
+    expect(result.warnings).toContain("排程输出包含未经核实的条目已剔除: LLM编造地点");
+  });
+
+  it("rehydrates plan items from grounded truth when LLM tampers with verification fields", async () => {
+    const grounded = [gp("未验证地点", 2, 2, false)];
+    grounded[0].location = undefined;
+    grounded[0].address = undefined;
+    const tampered = planWithItems([grounded[0]]);
+    tampered.days[0].items[0] = {
+      ...tampered.days[0].items[0],
+      verified: true,
+      location: { lng: 99, lat: 99 },
+      address: "LLM编造地址",
+      openHours: "24小时"
+    };
+
+    const result = await runPlan(grounded, [], input, { run: vi.fn().mockResolvedValue(JSON.stringify(tampered)) }, mapWithRoute(async () => ({ durationMin: 5, distanceKm: 1 })));
+
+    expect(result.days[0].items[0]).toMatchObject({
+      name: "未验证地点",
+      verified: false
+    });
+    expect(result.days[0].items[0].location).toBeUndefined();
+    expect(result.days[0].items[0].address).toBeUndefined();
+    expect(result.days[0].items[0].openHours).toBeUndefined();
+  });
 });
 
 describe("buildPlanPrompt", () => {

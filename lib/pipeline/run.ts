@@ -5,6 +5,7 @@ import { nanoid } from "nanoid";
 import { ManualFetcher } from "@/lib/fetchers/manual";
 import type { ContentFetcher } from "@/lib/fetchers/types";
 import { XhsCliFetcher } from "@/lib/fetchers/xhs-cli";
+import { XhsHttpFetcher } from "@/lib/fetchers/xhs-http";
 import { ClaudeCliRunner } from "@/lib/llm/claude-cli";
 import type { LLMRunner } from "@/lib/llm/types";
 import { AmapRestProvider } from "@/lib/map/amap-rest";
@@ -76,8 +77,9 @@ export async function runPipeline(
 export function createDefaultPipelineDeps(workDir?: string, input?: TripInput): { fetcher: ContentFetcher; llm: LLMRunner; map: MapProvider } {
   const manualDir = workDir ? path.join(workDir, "manual") : "";
   const useManual = Boolean(workDir && input && input.links.length === 0 && existsSyncish(manualDir));
+  const fetcher = process.env.PACKUP_FETCHER === "cli" ? new XhsCliFetcher() : new XhsHttpFetcher();
   return {
-    fetcher: useManual ? new ManualFetcher() : new XhsCliFetcher(),
+    fetcher: useManual ? new ManualFetcher() : fetcher,
     llm: new ClaudeCliRunner(),
     map: new AmapRestProvider()
   };
