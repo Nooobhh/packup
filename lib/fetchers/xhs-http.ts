@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { NoteSchema, type Note } from "@/lib/pipeline/types";
 import type { ContentFetcher } from "./types";
+
+const execFileAsync = promisify(execFile);
 
 type HttpPage = {
   ok: boolean;
@@ -73,20 +77,38 @@ export class XhsHttpFetcher implements ContentFetcher {
   }
 }
 
+// 默认 HTTP 实现走 curl 子进程而非 Node fetch:小红书 CDN 按 TLS 指纹 soft-block
+// undici(200 后掐 body 流),curl 指纹实测可稳定取全量。
+const curlMetaSeparator = "\n__CURL_META__:";
+
 async function defaultFetchPage(url: string, headers: Record<string, string>): Promise<HttpPage> {
-  const response = await fetch(url, { headers, redirect: "follow" });
+  const ua = headers["user-agent"] ?? desktopChromeUa;
+  const { stdout } = await execFileAsync(
+    "curl",
+    ["-sL", "--max-time", "30", "-A", ua, "-w", `${curlMetaSeparator}%{http_code} %{url_effective}`, url],
+    { maxBuffer: 16 * 1024 * 1024 }
+  );
+  const sepIndex = stdout.lastIndexOf(curlMetaSeparator);
+  if (sepIndex < 0) throw new Error("curl 输出缺少 meta 段");
+  const body = stdout.slice(0, sepIndex);
+  const meta = stdout.slice(sepIndex + curlMetaSeparator.length).trim();
+  const [statusText, finalUrl] = meta.split(" ");
+  const status = Number(statusText) || 0;
   return {
-    ok: response.ok,
-    status: response.status,
-    url: response.url,
-    text: () => response.text()
+    ok: status >= 200 && status < 300,
+    status,
+    url: finalUrl || url,
+    text: async () => body
   };
 }
 
 async function defaultFetchBinary(url: string): Promise<ArrayBuffer> {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`image download failed ${response.status}`);
-  return response.arrayBuffer();
+  const { stdout } = await execFileAsync("curl", ["-sL", "--max-time", "30", "-A", desktopChromeUa, url], {
+    encoding: "buffer",
+    maxBuffer: 32 * 1024 * 1024
+  });
+  if (stdout.byteLength === 0) throw new Error("image download failed: empty body");
+  return stdout.buffer.slice(stdout.byteOffset, stdout.byteOffset + stdout.byteLength) as ArrayBuffer;
 }
 
 function parseXhsHtml(html: string, landedUrl: string) {
