@@ -1,8 +1,4 @@
 import { execFile } from "node:child_process";
-import { mkdir, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
 import type { LLMRunner } from "./types";
 
 type ExecClaude = (args: string[], options: { timeoutMs: number }) => Promise<{ stdout: string; stderr?: string }>;
@@ -16,27 +12,19 @@ export class LLMTimeoutError extends Error {
 
 export class ClaudeCliRunner implements LLMRunner {
   private readonly execClaude: ExecClaude;
-  private readonly scratchDir: string;
   private readonly env: Record<string, string | undefined>;
 
-  constructor(opts: { execClaude?: ExecClaude; scratchDir?: string; env?: Record<string, string | undefined> } = {}) {
+  constructor(opts: { execClaude?: ExecClaude; env?: Record<string, string | undefined> } = {}) {
     this.execClaude = opts.execClaude ?? defaultExecClaude;
-    this.scratchDir = opts.scratchDir ?? path.join(os.tmpdir(), "packup-claude");
     this.env = opts.env ?? process.env;
   }
 
   async run(opts: Parameters<LLMRunner["run"]>[0]): Promise<string> {
-    await mkdir(this.scratchDir, { recursive: true });
-    let schemaPath: string | undefined;
-
     try {
       const prompt = withImageReferences(opts.prompt, opts.images ?? []);
       const args = ["-p", prompt, "--output-format", "json", "--model", this.env.PACKUP_CLAUDE_MODEL || "sonnet"];
-      if (opts.jsonSchema) {
-        schemaPath = path.join(this.scratchDir, `schema-${randomUUID()}.json`);
-        await writeFile(schemaPath, JSON.stringify(opts.jsonSchema), "utf8");
-        args.push("--json-schema", schemaPath);
-      }
+      // claude CLI 2.1.195 的 --json-schema 参数要求内联 JSON 字符串(传文件路径会被当 JSON 解析而报错)
+      if (opts.jsonSchema) args.push("--json-schema", JSON.stringify(opts.jsonSchema));
       if (opts.mcpConfig) args.push("--mcp-config", opts.mcpConfig);
       if (opts.allowedTools?.length) args.push("--allowedTools", opts.allowedTools.join(","));
 
@@ -47,21 +35,21 @@ export class ClaudeCliRunner implements LLMRunner {
       const stderr = typeof error === "object" && error && "stderr" in error ? String((error as { stderr?: unknown }).stderr ?? "") : "";
       if (stderr.trim()) throw new Error(stderr.trim());
       throw error;
-    } finally {
-      if (schemaPath) await rm(schemaPath, { force: true });
     }
   }
 }
 
 function defaultExecClaude(args: string[], options: { timeoutMs: number }): Promise<{ stdout: string; stderr?: string }> {
   return new Promise((resolve, reject) => {
-    execFile("claude", args, { timeout: options.timeoutMs, maxBuffer: 20 * 1024 * 1024 }, (error, stdout, stderr) => {
+    const child = execFile("claude", args, { timeout: options.timeoutMs, maxBuffer: 20 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) {
         reject(Object.assign(error, { stderr, timedOut: Boolean((error as NodeJS.ErrnoException & { killed?: boolean }).killed) }));
         return;
       }
       resolve({ stdout, stderr });
     });
+    // 立即关 stdin,避免 claude -p 等待 stdin 3 秒
+    child.stdin?.end();
   });
 }
 
@@ -78,6 +66,10 @@ function unwrapClaudeJson(stdout: string) {
     if (typeof parsed === "string") return parsed;
     if (parsed && typeof parsed === "object") {
       const obj = parsed as Record<string, unknown>;
+      // --json-schema 模式下结构化结果在 structured_output(已解析对象),优先取用
+      if (obj.structured_output && typeof obj.structured_output === "object") {
+        return JSON.stringify(obj.structured_output);
+      }
       for (const key of ["result", "output", "text", "message"]) {
         if (typeof obj[key] === "string") return obj[key] as string;
       }
