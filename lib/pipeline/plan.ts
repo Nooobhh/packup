@@ -1,7 +1,7 @@
 import type { LLMRunner } from "@/lib/llm/types";
 import type { MapProvider } from "@/lib/map/types";
 import { buildPlanPrompt, type PlanViolationDetail } from "@/lib/prompts/plan";
-import { backtrackRatio, distanceMatrix, nearestNeighborEdges } from "./geo";
+import { backtrackRatio, haversineKm, nearestNeighborEdges } from "./geo";
 import type { FilteredItem, GroundedPoi, LngLat, PlanDay, PlanItem, TripInput, TripPlan } from "./types";
 import { FilteredItemSchema, TripPlanSchema } from "./types";
 
@@ -40,7 +40,16 @@ async function buildContext(grounded: GroundedPoi[], input: TripInput, map: MapP
   const withLocations = grounded
     .filter((poi) => poi.verified && poi.location)
     .map((poi, index) => ({ id: poi.amapId ?? poi.id ?? `${poi.name}-${index}`, location: poi.location as LngLat, poi }));
-  const matrix = distanceMatrix(withLocations);
+  // 全量两两矩阵会撑爆排程 prompt(43 POI ≈ 900 对),LLM 只需要「谁和谁近」:
+  // 每 POI 给 k=5 近邻(name + km),体积砍一个数量级。
+  const matrix = withLocations.map((item) => ({
+    name: item.poi.name,
+    near: withLocations
+      .filter((other) => other !== item)
+      .map((other) => ({ name: other.poi.name, km: Number(haversineKm(item.location, other.location).toFixed(2)) }))
+      .sort((a, b) => a.km - b.km)
+      .slice(0, 5)
+  }));
   const byId = new Map(withLocations.map((item) => [item.id, item]));
   const routeSamples = [];
   for (const edge of nearestNeighborEdges(withLocations, 2).slice(0, 15)) {
@@ -48,7 +57,7 @@ async function buildContext(grounded: GroundedPoi[], input: TripInput, map: MapP
     const to = byId.get(edge.to);
     if (!from || !to) continue;
     const route = await map.route(from.location, to.location, input.transport ?? "public");
-    routeSamples.push({ ...edge, ...route });
+    routeSamples.push({ from: from.poi.name, to: to.poi.name, ...route });
   }
   return { matrix, routeSamples };
 }

@@ -32,12 +32,12 @@ export function buildPlanPrompt(args: {
     "固定天数照排; 浮动 base±flex 选择最优并写 daysDecision; 缺省按内容量和 pace 推荐 cap 15 并写 daysDecision。",
     "dailyThemes 硬约束: 指定主题当天 POI 类型必须贴合, 多余忽略、缺失无主题并写 warning。",
     "非平凡取舍必须写 PlanItem.note; 容量装不下的 POI 输出 filtered(stage='plan')。",
-    "距离矩阵为直线距离 ×1.4 折算参考:",
+    "各 POI 最近邻表(直线 km,规划按 ×1.4 折算路面距离):",
     JSON.stringify(args.distanceMatrix),
-    "候选边真实路线样本:",
+    "候选边真实路线样本(实测耗时,优先于估算):",
     JSON.stringify(args.routeSamples),
-    `已过滤上游内容: ${JSON.stringify(args.upstreamFiltered)}`,
-    `可排 POI: ${JSON.stringify(args.grounded)}`,
+    "可排 POI 列表如下。items[].name 必须逐字使用列表中的 name,不得改写或自创地点:",
+    JSON.stringify(slimPois(args.grounded)),
     args.validationError ? `上次输出未通过校验: ${args.validationError}` : "",
     args.previousPlan ? `上一版 TripPlan: ${JSON.stringify(compactPlan(args.previousPlan))}` : "",
     args.violations?.length ? `结构化违规明细: ${JSON.stringify(args.violations)}` : "",
@@ -45,6 +45,20 @@ export function buildPlanPrompt(args: {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+// 只给 LLM 排程需要的字段:坐标/ID 等由程序侧 rehydration 回填,reason 截断控制体积
+function slimPois(grounded: GroundedPoi[]) {
+  return grounded.map((poi) => ({
+    name: poi.name,
+    type: poi.type,
+    city: poi.city || undefined,
+    verified: poi.verified,
+    openHours: poi.openHours || undefined,
+    timeHint: poi.timeHint || undefined,
+    suggestedDuration: poi.suggestedDuration || undefined,
+    reason: poi.reason ? poi.reason.slice(0, 80) : undefined
+  }));
 }
 
 function renderDaysInput(input: TripInput) {
