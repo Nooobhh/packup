@@ -65,6 +65,36 @@ describe("runPlan", () => {
     expect(result.warnings.some((warning) => warning.includes("兜底"))).toBe(true);
   });
 
+  it("sends previous plan order, measured transport, and structured violations to repair prompt", async () => {
+    const grounded = [gp("a", 0, 0), gp("b", 1, 0), gp("c", 2, 0)];
+    const badPlan = planWithItems([grounded[0], grounded[1]], 400);
+    const repairedPlan = planWithItems([grounded[0]], 60);
+    const llm: LLMRunner = {
+      run: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify(badPlan))
+        .mockImplementationOnce(async (opts) => {
+          expect(opts.prompt).toContain("上一版 TripPlan");
+          expect(opts.prompt).toContain('"name":"a"');
+          expect(opts.prompt).toContain('"name":"b"');
+          expect(opts.prompt).toContain('"startTime":"09:00"');
+          expect(opts.prompt).toContain('"durationMin":400');
+          expect(opts.prompt).toContain('"transportToNext"');
+          expect(opts.prompt).toContain('"durationMin":95');
+          expect(opts.prompt).toContain('"threshold":720');
+          expect(opts.prompt).toContain('"threshold":90');
+          expect(opts.prompt).toContain("保留未违规天/段");
+          expect(opts.prompt).toContain("仅重排违规部分");
+          return JSON.stringify(repairedPlan);
+        })
+    };
+    const map = mapWithRoute(async () => ({ durationMin: 95, distanceKm: 1 }));
+
+    await runPlan(grounded, [], input, llm, map);
+
+    expect(llm.run).toHaveBeenCalledTimes(2);
+  });
+
   it("adds daysDecision when days are omitted and keeps floating output inside range", async () => {
     const grounded = [gp("a", 0, 0), gp("b", 1, 0), gp("c", 2, 0)];
     const map = mapWithRoute(async () => ({ durationMin: 5, distanceKm: 1 }));
@@ -86,6 +116,54 @@ describe("buildPlanPrompt", () => {
     expect(prompt).toContain("笔记建议");
     expect(prompt).toContain("packed 5-7");
     expect(prompt).toContain("dailyThemes 硬约束");
+  });
+
+  it("serializes floating days, daily themes, selected pace range, and startDate weekdays", () => {
+    const prompt = buildPlanPrompt({
+      grounded: [],
+      upstreamFiltered: [],
+      input: {
+        ...input,
+        days: { base: 2, flex: 1 },
+        dailyThemes: ["市区"],
+        pace: "moderate",
+        startDate: "2026-07-03"
+      },
+      distanceMatrix: [],
+      routeSamples: []
+    });
+
+    expect(prompt).toContain("days.base=2");
+    expect(prompt).toContain("days.flex=1");
+    expect(prompt).toContain("实际天数范围 1-3");
+    expect(prompt).toContain("Day 1: 主题=市区");
+    expect(prompt).toContain("Day 2: 主题=无主题");
+    expect(prompt).toContain("pace=moderate");
+    expect(prompt).toContain("moderate 3-5");
+    expect(prompt).toContain("startDate=2026-07-03");
+    expect(prompt).toContain("Day 1: 日期=2026-07-03 星期五");
+    expect(prompt).toContain("Day 2: 日期=2026-07-04 星期六");
+  });
+
+  it("serializes omitted days as recommendation instructions with selected relaxed pace", () => {
+    const prompt = buildPlanPrompt({
+      grounded: [],
+      upstreamFiltered: [],
+      input: {
+        links: ["https://xhslink.com/1"],
+        destination: "上海",
+        transport: "walk",
+        pace: "relaxed"
+      },
+      distanceMatrix: [],
+      routeSamples: []
+    });
+
+    expect(prompt).toContain("days=缺省");
+    expect(prompt).toContain("按内容量推荐");
+    expect(prompt).toContain("cap 15");
+    expect(prompt).toContain("pace=relaxed");
+    expect(prompt).toContain("relaxed 2-3");
   });
 });
 

@@ -1,6 +1,6 @@
 import type { LLMRunner } from "@/lib/llm/types";
 import type { MapProvider } from "@/lib/map/types";
-import { buildPlanPrompt } from "@/lib/prompts/plan";
+import { buildPlanPrompt, type PlanViolationDetail } from "@/lib/prompts/plan";
 import { backtrackRatio, distanceMatrix, nearestNeighborEdges } from "./geo";
 import type { FilteredItem, GroundedPoi, LngLat, PlanDay, PlanItem, TripInput, TripPlan } from "./types";
 import { FilteredItemSchema, TripPlanSchema } from "./types";
@@ -20,7 +20,8 @@ export async function runPlan(
 
   let violations = findViolations(plan);
   for (let repair = 0; violations.length > 0 && repair < 2; repair++) {
-    plan = await callPlanner(grounded, upstreamFiltered, input, llm, context, undefined, violations);
+    const previousPlan = plan;
+    plan = await callPlanner(grounded, upstreamFiltered, input, llm, context, undefined, violations, previousPlan);
     plan = ensureDaysDecision(enforceFlexibleDayRange(plan, input), input);
     await fillAdjacentRoutes(plan, input, map);
     violations = findViolations(plan);
@@ -59,7 +60,8 @@ async function callPlanner(
   llm: LLMRunner,
   context: { matrix: unknown; routeSamples: unknown },
   validationError?: string,
-  violations?: string[]
+  violations?: PlanViolationDetail[],
+  previousPlan?: TripPlan
 ): Promise<TripPlan> {
   let lastError = validationError;
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -71,7 +73,8 @@ async function callPlanner(
         distanceMatrix: context.matrix,
         routeSamples: context.routeSamples,
         validationError: lastError,
-        violations
+        violations,
+        previousPlan
       }),
       jsonSchema: planJsonSchema,
       timeoutMs: 600_000
@@ -100,16 +103,43 @@ async function fillAdjacentRoutes(plan: TripPlan, input: TripInput, map: MapProv
 }
 
 function findViolations(plan: TripPlan) {
-  const violations: string[] = [];
+  const violations: PlanViolationDetail[] = [];
   for (const day of plan.days) {
     const label = day.index ?? day.day ?? "?";
     const total = day.items.reduce((sum, item) => sum + item.durationMin + (item.transportToNext?.durationMin ?? 0), 0);
-    if (total > 720) violations.push(`第 ${label} 天超载 ${total}min`);
+    if (total > 720) {
+      violations.push({
+        day: label,
+        metric: "day-total-min",
+        measured: total,
+        threshold: 720,
+        message: `第 ${label} 天超载 ${total}min`
+      });
+    }
     day.items.forEach((item, index) => {
-      if ((item.transportToNext?.durationMin ?? 0) > 90) violations.push(`第 ${label} 天第 ${index + 1} 段交通超过90min`);
+      const measured = item.transportToNext?.durationMin ?? 0;
+      if (measured > 90) {
+        violations.push({
+          day: label,
+          segmentIndex: index + 1,
+          metric: "segment-transport-min",
+          measured,
+          threshold: 90,
+          message: `第 ${label} 天第 ${index + 1} 段交通 ${measured}min 超过90min`
+        });
+      }
     });
     const points = day.items.map(itemLocation).filter(Boolean) as LngLat[];
-    if (backtrackRatio(points) > 1.5) violations.push(`第 ${label} 天折返比 ${backtrackRatio(points).toFixed(2)}`);
+    const ratio = backtrackRatio(points);
+    if (ratio > 1.5) {
+      violations.push({
+        day: label,
+        metric: "backtrack-ratio",
+        measured: Number(ratio.toFixed(2)),
+        threshold: 1.5,
+        message: `第 ${label} 天折返比 ${ratio.toFixed(2)}`
+      });
+    }
   }
   return violations;
 }
