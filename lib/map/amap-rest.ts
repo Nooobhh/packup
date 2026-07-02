@@ -1,3 +1,4 @@
+import { haversineKm } from "@/lib/pipeline/geo";
 import type { AmapPoi, LngLat, MapProvider, TransportMode } from "./types";
 
 type FetchJson = (url: string) => Promise<unknown>;
@@ -9,18 +10,24 @@ export class MapKeyMissingError extends Error {
   }
 }
 
+const QPS_INFOCODE = "10021"; // CUQPS_HAS_EXCEEDED_THE_LIMIT
+const MAX_CONCURRENCY = 2; // 个人 key 免费额度 QPS 低,留余量
+const MAX_QPS_RETRIES = 4;
+
 export class AmapRestProvider implements MapProvider {
   private readonly key: string;
   private readonly fetchJson: FetchJson;
+  private readonly sleep: (ms: number) => Promise<void>;
   private active = 0;
   private readonly queue: Array<() => void> = [];
 
-  constructor(opts: { env?: Record<string, string | undefined>; fetchJson?: FetchJson } = {}) {
+  constructor(opts: { env?: Record<string, string | undefined>; fetchJson?: FetchJson; sleep?: (ms: number) => Promise<void> } = {}) {
     const env = opts.env ?? process.env;
     const key = env.AMAP_REST_KEY;
     if (!key) throw new MapKeyMissingError();
     this.key = key;
     this.fetchJson = opts.fetchJson ?? defaultFetchJson;
+    this.sleep = opts.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
 
   async searchPoi(name: string, city: string): Promise<AmapPoi | null> {
@@ -71,11 +78,13 @@ export class AmapRestProvider implements MapProvider {
     assertAmapOk(response);
     const route = response.route as Record<string, unknown> | undefined;
     const path = (array(route?.paths)[0] ?? array(route?.transits)[0]) as Record<string, unknown> | undefined;
-    if (!path) throw new Error("Amap route response missing path");
-    return {
-      durationMin: Math.round(number(path.duration) / 60),
-      distanceKm: number(path.distance) / 1000
-    };
+    // 高德对极近距离/无公交方案的点对会返回空 path/transits(香港同街相邻 POI 常见)。
+    // 此时降级为直线距离 + 步行速度估算,而非炸掉整个排程。
+    if (!path) return estimateWalk(from, to);
+    const distanceKm = number(path.distance) / 1000;
+    const durationMin = Math.round(number(path.duration) / 60);
+    if (distanceKm === 0 && durationMin === 0) return estimateWalk(from, to);
+    return { durationMin, distanceKm };
   }
 
   private url(endpoint: string, params: Record<string, string | undefined>) {
@@ -89,14 +98,22 @@ export class AmapRestProvider implements MapProvider {
   private async call(url: string) {
     await this.acquire();
     try {
-      return (await this.fetchJson(url)) as Record<string, unknown>;
+      // QPS 超限(个人 key 高频撞限)时指数退避重试,而非炸整段管线
+      for (let attempt = 0; ; attempt++) {
+        const response = (await this.fetchJson(url)) as Record<string, unknown>;
+        if (string(response.infocode) === QPS_INFOCODE && attempt < MAX_QPS_RETRIES) {
+          await this.sleep(200 * 2 ** attempt);
+          continue;
+        }
+        return response;
+      }
     } finally {
       this.release();
     }
   }
 
   private async acquire() {
-    if (this.active < 3) {
+    if (this.active < MAX_CONCURRENCY) {
       this.active++;
       return;
     }
@@ -109,6 +126,13 @@ export class AmapRestProvider implements MapProvider {
     const next = this.queue.shift();
     if (next) next();
   }
+}
+
+// route 空结果降级:直线距离 ×1.3 路面折算,步行 ~5km/h(min 5 分钟)
+function estimateWalk(from: LngLat, to: LngLat) {
+  const distanceKm = haversineKm(from, to) * 1.3;
+  const durationMin = Math.max(5, Math.round((distanceKm / 5) * 60));
+  return { durationMin, distanceKm };
 }
 
 async function defaultFetchJson(url: string) {

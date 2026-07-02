@@ -63,6 +63,29 @@ describe("AmapRestProvider", () => {
     expect(fetchJson.mock.calls[2][0]).toContain("/direction/transit/integrated");
   });
 
+  it("falls back to straight-line walk estimate when route returns empty path", async () => {
+    // 高德对极近距离/无公交方案返回空 transits,应降级估算而非抛错
+    const fetchJson = vi.fn().mockResolvedValue({ status: "1", route: { transits: [] } });
+    const provider = new AmapRestProvider({ env: { AMAP_REST_KEY: "k" }, fetchJson });
+
+    const result = await provider.route({ lng: 114.175, lat: 22.315 }, { lng: 114.173, lat: 22.307 }, "public");
+    expect(result.distanceKm).toBeGreaterThan(0);
+    expect(result.durationMin).toBeGreaterThanOrEqual(5);
+  });
+
+  it("retries with backoff on QPS-exceeded infocode then succeeds", async () => {
+    const fetchJson = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "0", infocode: "10021", info: "CUQPS_HAS_EXCEEDED_THE_LIMIT" })
+      .mockResolvedValueOnce({ status: "1", route: { paths: [{ duration: "600", distance: "3200" }] } });
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const provider = new AmapRestProvider({ env: { AMAP_REST_KEY: "k" }, fetchJson, sleep });
+
+    await expect(provider.route({ lng: 1, lat: 2 }, { lng: 3, lat: 4 }, "drive")).resolves.toEqual({ durationMin: 10, distanceKm: 3.2 });
+    expect(fetchJson).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
   it("limits concurrent HTTP calls to three", async () => {
     let active = 0;
     let maxActive = 0;
