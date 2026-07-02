@@ -1,0 +1,77 @@
+import type { LLMRunner } from "@/lib/llm/types";
+import { buildExtractPrompt } from "@/lib/prompts/extract";
+import type { CandidatePoi, FilteredItem, Note, TripInput } from "./types";
+import { CandidatePoiSchema, FilteredItemSchema } from "./types";
+
+export async function runExtract(
+  notes: Note[],
+  input: TripInput,
+  llm: LLMRunner
+): Promise<{ pois: CandidatePoi[]; filtered: FilteredItem[]; failedNotes: { noteId: string; reason: string }[] }> {
+  const okNotes = notes.filter((note) => note.fetchStatus === "ok");
+  const results = await mapLimit(okNotes, 3, (note) => extractOne(note, input, llm));
+  return {
+    pois: results.flatMap((result) => result.pois),
+    filtered: results.flatMap((result) => result.filtered),
+    failedNotes: results.flatMap((result) => result.failed ? [result.failed] : [])
+  };
+}
+
+async function extractOne(note: Note, input: TripInput, llm: LLMRunner) {
+  let validationError: string | undefined;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let raw: string;
+    try {
+      raw = await llm.run({
+        prompt: buildExtractPrompt(note, input, validationError),
+        images: note.images,
+        jsonSchema: extractJsonSchema,
+        timeoutMs: 120_000
+      });
+    } catch (error) {
+      return { pois: [], filtered: [], failed: { noteId: note.id, reason: error instanceof Error ? error.message : String(error) } };
+    }
+
+    try {
+      return normalizeExtractPayload(JSON.parse(raw), note.id);
+    } catch (error) {
+      validationError = error instanceof Error ? error.message : String(error);
+      if (attempt === 1) {
+        return { pois: [], filtered: [], failed: { noteId: note.id, reason: validationError } };
+      }
+    }
+  }
+  return { pois: [], filtered: [], failed: { noteId: note.id, reason: "unknown extract failure" } };
+}
+
+function normalizeExtractPayload(payload: unknown, noteId: string) {
+  if (!payload || typeof payload !== "object") throw new Error("LLM output is not an object");
+  const object = payload as { pois?: unknown[]; filtered?: unknown[] };
+  const pois = (object.pois ?? []).map((item) => CandidatePoiSchema.parse({ ...(item as object), sourceNoteId: noteId }));
+  const filtered = (object.filtered ?? []).map((item) =>
+    FilteredItemSchema.parse({ ...(item as object), sourceNoteId: (item as { sourceNoteId?: string }).sourceNoteId ?? noteId, stage: "extract" })
+  );
+  return { pois, filtered, failed: undefined as undefined | { noteId: string; reason: string } };
+}
+
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < items.length) {
+      const index = cursor++;
+      results[index] = await fn(items[index]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+const extractJsonSchema = {
+  type: "object",
+  required: ["pois", "filtered"],
+  properties: {
+    pois: { type: "array" },
+    filtered: { type: "array" }
+  }
+};
