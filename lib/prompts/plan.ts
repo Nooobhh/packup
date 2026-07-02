@@ -71,7 +71,10 @@ function renderDailyThemes(input: TripInput) {
 }
 
 function renderStartDate(input: TripInput) {
-  if (!input.startDate || !input.days) return "startDate=未提供";
+  if (!input.startDate) return "startDate=未提供";
+  if (!input.days) {
+    return `startDate=${input.startDate}(${weekdayZh(input.startDate)}); 按你选定的天数从该日期推导每日星期,核对 openHours`;
+  }
   return [
     `startDate=${input.startDate}`,
     ...Array.from({ length: input.days.base }, (_, index) => {

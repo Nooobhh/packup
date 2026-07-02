@@ -165,6 +165,26 @@ describe("buildPlanPrompt", () => {
     expect(prompt).toContain("pace=relaxed");
     expect(prompt).toContain("relaxed 2-3");
   });
+
+  it("serializes startDate with weekday derivation instructions when days are omitted", () => {
+    const prompt = buildPlanPrompt({
+      grounded: [],
+      upstreamFiltered: [],
+      input: {
+        links: ["https://xhslink.com/1"],
+        destination: "上海",
+        startDate: "2026-07-03",
+        transport: "public",
+        pace: "moderate"
+      },
+      distanceMatrix: [],
+      routeSamples: []
+    });
+
+    expect(prompt).toContain("startDate=2026-07-03(星期五)");
+    expect(prompt).toContain("按你选定的天数从该日期推导每日星期,核对 openHours");
+    expect(prompt).not.toContain("startDate=未提供");
+  });
 });
 
 function gp(name: string, lng: number, lat: number, verified = true): GroundedPoi {
