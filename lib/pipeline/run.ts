@@ -15,8 +15,10 @@ import { runGround } from "./ground";
 import { runPlan } from "./plan";
 import {
   ExtractOutputSchema,
+  FilteredItemSchema,
   GroundOutputSchema,
   NoteSchema,
+  SelectionSchema,
   TripInputSchema,
   TripPlanSchema,
   type ExtractOutput,
@@ -39,7 +41,7 @@ const outputFiles: Record<StageName, string> = {
 export async function runPipeline(
   input: TripInput,
   deps: { fetcher: ContentFetcher; llm: LLMRunner; map: MapProvider },
-  opts: { onEvent?: (e: StageEvent) => void; force?: boolean; fromStage?: StageName } = {}
+  opts: { onEvent?: (e: StageEvent) => void; force?: boolean; fromStage?: StageName; toStage?: StageName } = {}
 ): Promise<{ tripId: string }> {
   const parsedInput = TripInputSchema.parse(input);
   const tripId = parsedInput.id ?? nanoid(10);
@@ -59,6 +61,7 @@ export async function runPipeline(
       if (stage === "ground") await runGroundStage(parsedInput, deps.map, workDir);
       if (stage === "plan") await runPlanStage(parsedInput, deps.llm, deps.map, workDir);
       emit(opts.onEvent, stage, "done");
+      if (opts.toStage === stage) break;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await writeJson(path.join(workDir, `${stage}.error.json`), {
@@ -131,7 +134,29 @@ async function runGroundStage(input: TripInput, map: MapProvider, workDir: strin
 
 async function runPlanStage(input: TripInput, llm: LLMRunner, map: MapProvider, workDir: string) {
   const ground = GroundOutputSchema.parse(await readJson(path.join(workDir, outputFiles.ground)));
-  const plan = await runPlan(ground.grounded, ground.filtered, input, llm, map);
+  const selectionFile = path.join(workDir, "25-selection.json");
+  let selectedGrounded = ground.grounded;
+  let filtered = ground.filtered;
+  if (await exists(selectionFile)) {
+    const selection = SelectionSchema.parse(await readJson(selectionFile));
+    const selected = new Set(selection.selectedPoiIds);
+    selectedGrounded = ground.grounded.filter((poi) => selected.has(poi.id ?? poi.amapId ?? poi.name));
+    filtered = [
+      ...ground.filtered,
+      ...ground.grounded
+        .filter((poi) => !selected.has(poi.id ?? poi.amapId ?? poi.name))
+        .map((poi) =>
+          FilteredItemSchema.parse({
+            id: poi.id ?? poi.amapId ?? poi.name,
+            name: poi.name,
+            sourceNoteId: poi.sourceNoteId,
+            stage: "plan",
+            reason: "用户未选入排程"
+          })
+        )
+    ];
+  }
+  const plan = await runPlan(selectedGrounded, filtered, input, llm, map);
   await writeJson(path.join(workDir, outputFiles.plan), TripPlanSchema.parse(plan));
 }
 

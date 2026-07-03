@@ -90,6 +90,57 @@ describe("runPipeline", () => {
     await expect(readFile(path.join(dir, "40-plan.json"), "utf8")).resolves.toContain("外滩");
   });
 
+  it("stops after toStage ground without running plan", async () => {
+    const events: StageEvent[] = [];
+    const deps = depsForSuccess();
+
+    await runPipeline(input, deps, { toStage: "ground", onEvent: (event) => events.push(event) });
+
+    const dir = path.join(dataRoot, "trip-test");
+    expect(events.map((event) => `${event.stage}:${event.status}`)).toEqual([
+      "fetch:start",
+      "fetch:done",
+      "extract:start",
+      "extract:done",
+      "ground:start",
+      "ground:done"
+    ]);
+    await expect(readFile(path.join(dir, "30-grounded.json"), "utf8")).resolves.toContain("外滩");
+    await expect(readFile(path.join(dir, "40-plan.json"), "utf8")).rejects.toThrow();
+    expect(deps.llm.run).toHaveBeenCalledTimes(1);
+  });
+
+  it("filters grounded POIs by selection when resuming plan", async () => {
+    const dir = path.join(dataRoot, "trip-test");
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "00-input.json"), JSON.stringify(input), "utf8");
+    await writeFile(path.join(dir, "30-grounded.json"), JSON.stringify({ grounded: [grounded("p1", "外滩"), grounded("p2", "豫园"), grounded("p3", "商场")], filtered: [] }), "utf8");
+    await writeFile(path.join(dir, "25-selection.json"), JSON.stringify({ selectedPoiIds: ["p1", "p2"], selectedAt: "2026-07-03T00:00:00.000Z" }), "utf8");
+    const deps = depsForSuccess();
+    deps.llm.run = vi.fn().mockResolvedValue(JSON.stringify({ days: [{ slots: { morning: ["p1"], afternoon: ["p2"], evening: [] } }] }));
+
+    await runPipeline(input, deps, { fromStage: "plan" });
+
+    const plan = JSON.parse(await readFile(path.join(dir, "40-plan.json"), "utf8"));
+    expect(plan.days.flatMap((day: { items: Array<{ poiId: string }> }) => day.items.map((item) => item.poiId))).toEqual(["p1", "p2"]);
+    expect(plan.filtered).toEqual([expect.objectContaining({ id: "p3", stage: "plan", reason: "用户未选入排程" })]);
+  });
+
+  it("uses all grounded POIs when resuming plan without a selection file", async () => {
+    const dir = path.join(dataRoot, "trip-test");
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "00-input.json"), JSON.stringify(input), "utf8");
+    await writeFile(path.join(dir, "30-grounded.json"), JSON.stringify({ grounded: [grounded("p1", "外滩"), grounded("p2", "豫园"), grounded("p3", "商场")], filtered: [] }), "utf8");
+    const deps = depsForSuccess();
+    deps.llm.run = vi.fn().mockResolvedValue(JSON.stringify({ days: [{ slots: { morning: ["p1"], afternoon: ["p2", "p3"], evening: [] } }] }));
+
+    await runPipeline(input, deps, { fromStage: "plan" });
+
+    const plan = JSON.parse(await readFile(path.join(dir, "40-plan.json"), "utf8"));
+    expect(plan.days.flatMap((day: { items: Array<{ poiId: string }> }) => day.items.map((item) => item.poiId))).toEqual(["p1", "p2", "p3"]);
+    expect(plan.filtered).toEqual([]);
+  });
+
   it("force reruns from a stage and deletes downstream artifacts", async () => {
     const dir = path.join(dataRoot, "trip-test");
     await mkdir(dir, { recursive: true });
@@ -137,8 +188,8 @@ function depsForSuccess(): { fetcher: ContentFetcher & { fetch: ReturnType<typeo
   };
 }
 
-function grounded() {
-  return { name: "外滩", type: "sight", reason: "好看", sourceNoteId: "note1", sourceType: "text", verified: true, amapId: "a1", location: { lng: 1, lat: 1 }, address: "addr" };
+function grounded(id = "a1", name = "外滩") {
+  return { id, name, type: "sight", reason: "好看", sourceNoteId: "note1", sourceType: "text", verified: true, amapId: id, location: { lng: 1, lat: 1 }, address: "addr" };
 }
 
 function planItem() {
