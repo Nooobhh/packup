@@ -7,7 +7,7 @@
 - 类型: 发行产品
 - 集群归属: 未分类（待归类）
 - 状态: active
-- 版本: 0.2.0
+- 版本: 0.3.0
 
 ## Agent 行为约定
 - 继承全局 ~/CLAUDE.md 编码原则
@@ -16,10 +16,12 @@
 
 ## 关键文件 / 命令
 - 命令：`npm run dev` / `npm test` / `npm run build`；单段重跑 `npm run stage -- <tripId> <stage> [--force]`
-- 管线：`lib/pipeline/`（fetch→extract→ground→plan，编排 run.ts），数据契约全在 `lib/pipeline/types.ts`（zod）
+- 管线：`lib/pipeline/`（fetch→extract→ground→【选点】→plan 两段式，run.ts 支持 toStage/fromStage），契约全在 types.ts（zod）
 - 三抽象接口：`lib/fetchers/`（ContentFetcher）、`lib/map/`（MapProvider）、`lib/llm/`（LLMRunner），换实现不动管线
-- 中间产物：`data/trips/<id>/00~40-*.json` + images/（gitignored，断点续跑依据）
-- UI：`app/page.tsx`（输入）、`app/trip/[id]/`（行程页），API `app/api/generate`（SSE）+ `app/api/trips/[id]`
+- 中间产物：`data/trips/<id>/00~40-*.json` + 25-selection.json（选点）+ images/（gitignored，断点续跑依据）
+- 时间预算：超时常量集中 `lib/pipeline/budgets.ts`（正常路径 ≤300s 单测锁死），段超时走部分成功不炸管线
+- UI：`app/page.tsx`（搜索框+链接）、`app/trip/[id]/select`（选点页）、`app/trip/[id]/`（行程页）
+- API：`app/api/generate`（SSE，首事件带 tripId）+ `app/api/trips/[id]` 及其下 candidates/selection/plan（PATCH 重排改交通）
 
 ## 集成点
 - LLM = 本机 `claude -p`（订阅内零 API 费；`PACKUP_CLAUDE_MODEL` 换模型，默认 sonnet）
