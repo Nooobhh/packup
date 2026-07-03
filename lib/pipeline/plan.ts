@@ -12,8 +12,14 @@ export async function runPlan(
   llm: LLMRunner,
   map: MapProvider
 ): Promise<TripPlan> {
-  const context = await buildContext(grounded, input, map);
-  let plan = await callPlanner(grounded, upstreamFiltered, input, llm, context);
+  // 候选 POI 远超行程容量时(如 44 个排 3 天),LLM 消化全量既慢又无益:
+  // 按「每天上限 × 天数 + 余量」预算,分类型保留高优先级项,超额进 filtered。
+  const { kept, budgetFiltered } = budgetPois(grounded, input);
+  const activeGrounded = kept;
+  const preFiltered = [...upstreamFiltered, ...budgetFiltered];
+
+  const context = await buildContext(activeGrounded, input, map);
+  let plan = await callPlanner(activeGrounded, preFiltered, input, llm, context);
   plan = ensureDaysDecision(plan, input);
   plan = enforceFlexibleDayRange(plan, input);
   await fillAdjacentRoutes(plan, input, map);
@@ -21,7 +27,7 @@ export async function runPlan(
   let violations = findViolations(plan);
   for (let repair = 0; violations.length > 0 && repair < 2; repair++) {
     const previousPlan = plan;
-    plan = await callPlanner(grounded, upstreamFiltered, input, llm, context, undefined, violations, previousPlan);
+    plan = await callPlanner(activeGrounded, preFiltered, input, llm, context, undefined, violations, previousPlan);
     plan = ensureDaysDecision(enforceFlexibleDayRange(plan, input), input);
     await fillAdjacentRoutes(plan, input, map);
     violations = findViolations(plan);
@@ -31,9 +37,29 @@ export async function runPlan(
     plan = await fallbackPlan(plan, input, map);
   }
 
-  plan.filtered = [...upstreamFiltered, ...plan.filtered];
+  plan.filtered = [...preFiltered, ...plan.filtered];
   addWarnings(plan, input);
   return TripPlanSchema.parse(plan);
+}
+
+// 按行程容量给 POI 定预算:每天上限(pace 决定)× 天数 × 1.5 余量,给 LLM 留选择空间但不淹没。
+// 分类型按优先级(已验证 > 有 timeHint > 有 reason)保留,超额移入 filtered。
+function budgetPois(grounded: GroundedPoi[], input: TripInput): { kept: GroundedPoi[]; budgetFiltered: FilteredItem[] } {
+  const perDayMax = input.pace === "packed" ? 7 : input.pace === "relaxed" ? 3 : 5;
+  const days = input.days ? input.days.base + (input.days.flex ?? 0) : 4; // 缺省按 4 天估
+  const budget = Math.ceil(perDayMax * days * 1.5);
+  if (grounded.length <= budget) return { kept: grounded, budgetFiltered: [] };
+
+  const score = (p: GroundedPoi) => (p.verified ? 4 : 0) + (p.timeHint ? 2 : 0) + (p.reason ? 1 : 0);
+  const ranked = [...grounded].map((poi, index) => ({ poi, index, score: score(poi) })).sort((a, b) => b.score - a.score || a.index - b.index);
+  const kept = ranked.slice(0, budget).sort((a, b) => a.index - b.index).map((item) => item.poi);
+  const budgetFiltered = ranked.slice(budget).map((item) => ({
+    name: item.poi.name,
+    sourceNoteId: item.poi.sourceNoteId,
+    stage: "plan" as const,
+    why: `候选 POI 超出 ${days} 天行程容量,优先级较低未纳入排程`
+  }));
+  return { kept, budgetFiltered };
 }
 
 async function buildContext(grounded: GroundedPoi[], input: TripInput, map: MapProvider) {
@@ -86,10 +112,10 @@ async function callPlanner(
         previousPlan
       }),
       jsonSchema: planJsonSchema,
-      timeoutMs: 600_000
+      timeoutMs: 900_000
     });
     try {
-      return rehydratePlanItems(TripPlanSchema.parse(JSON.parse(raw)), grounded);
+      return rehydratePlanItems(TripPlanSchema.parse(sanitizeRawPlan(JSON.parse(raw))), grounded);
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
       if (attempt === 1) throw error;
@@ -264,6 +290,18 @@ function lowestPriorityIndex(items: PlanItem[]) {
     }
   }
   return best;
+}
+
+// LLM 常把可选的 daysDecision 输出成 JSON null 或字面量 "null" 字符串,
+// 二者都过不了 zod union(string | object)。schema parse 前统一剥掉。
+function sanitizeRawPlan(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object") return raw;
+  const obj = raw as Record<string, unknown>;
+  const dd = obj.daysDecision;
+  if (dd === null || (typeof dd === "string" && ["null", "none", "undefined", ""].includes(dd.trim().toLowerCase()))) {
+    delete obj.daysDecision;
+  }
+  return obj;
 }
 
 function ensureDaysDecision(plan: TripPlan, input: TripInput) {

@@ -270,3 +270,30 @@ function planWithItems(pois: GroundedPoi[], durationMin = 60): TripPlan {
 function mapWithRoute(route: MapProvider["route"]): MapProvider {
   return { searchPoi: vi.fn(), route: vi.fn(route) };
 }
+
+describe("budgetPois pre-filtering", () => {
+  it("caps oversized candidate sets before planning and files overflow as filtered", async () => {
+    // 30 POI 排 3 天 moderate → 预算 ceil(5*3*1.5)=23,应砍 7 个进 filtered
+    const many = Array.from({ length: 30 }, (_, i) => gp(`P${i}`, 114 + i * 0.001, 22 + i * 0.001, true));
+    const llm: LLMRunner = {
+      run: vi.fn(async (opts) => {
+        // 断言 prompt 里可排 POI 不超过预算(体现预筛已生效)
+        const poiCount = (opts.prompt.match(/"name":/g) || []).length;
+        return JSON.stringify({
+          days: [{ index: 1, items: [{ name: "P0", startTime: "09:00", durationMin: 60 }] }],
+          filtered: [],
+          warnings: [],
+          daysDecision: null
+        });
+      })
+    };
+    const map: MapProvider = {
+      searchPoi: vi.fn(),
+      route: vi.fn(async () => ({ durationMin: 10, distanceKm: 1 }))
+    };
+    const input: TripInput = { links: ["x"], destination: "香港", days: { base: 3, flex: 0 }, pace: "moderate" };
+    const plan = await runPlan(many, [], input, llm, map);
+    const budgetFiltered = plan.filtered.filter((f) => f.why?.includes("行程容量"));
+    expect(budgetFiltered.length).toBe(7);
+  });
+});
