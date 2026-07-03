@@ -3,7 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 import { AmapRestProvider } from "@/lib/map/amap-rest";
 import type { MapProvider } from "@/lib/map/types";
-import { haversineKm } from "@/lib/pipeline/geo";
+import { recommendLegTransport } from "@/lib/pipeline/plan";
 import { TransportModeSchema, TripPlanSchema, type LngLat, type PlanItem, type TripPlan, type TransportMode } from "@/lib/pipeline/types";
 
 const PatchSchema = z.discriminatedUnion("op", [
@@ -73,17 +73,8 @@ async function setTransport(items: PlanItem[], index: number, mode: TransportMod
 }
 
 async function recommendTransport(items: PlanItem[], index: number, map: Pick<MapProvider, "route">) {
-  const from = itemLocation(items[index]);
-  const to = itemLocation(items[index + 1]);
-  if (!from || !to) return;
-  const directKm = haversineKm(from, to);
-  if (items[index].clusterKey && items[index].clusterKey === items[index + 1].clusterKey) {
-    items[index].transportToNext = { mode: "walk", durationMin: Math.min(5, Math.max(1, Math.round((directKm / 5) * 60))), distanceKm: directKm };
-    return;
-  }
-  const mode = directKm < 0.8 ? "walk" : "public";
-  const route = await map.route(from, to, mode);
-  items[index].transportToNext = { ...route, mode };
+  const route = await recommendLegTransport(items[index], items[index + 1], { transport: "public" }, map);
+  if (route) items[index].transportToNext = route;
 }
 
 function groupItems(items: PlanItem[]) {
@@ -93,6 +84,11 @@ function groupItems(items: PlanItem[]) {
     const last = groups.at(-1);
     if (last?.id === id) last.items.push(item);
     else groups.push({ id, items: [item] });
+  }
+  const seen = new Set<string>();
+  for (const group of groups) {
+    if (seen.has(group.id)) throw new Error("同一 clusterKey 存在非相邻分段,请先重新生成行程");
+    seen.add(group.id);
   }
   return groups;
 }

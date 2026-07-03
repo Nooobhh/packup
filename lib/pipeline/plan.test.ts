@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { LLMRunner } from "@/lib/llm/types";
 import type { MapProvider } from "@/lib/map/types";
 import { buildPlanPrompt } from "@/lib/prompts/plan";
+import { backtrackRatio } from "./geo";
 import { runPlan } from "./plan";
 import type { GroundedPoi, TripInput } from "./types";
 
@@ -147,6 +148,80 @@ describe("runPlan", () => {
     );
 
     expect(result.days[0].items.map((item) => item.durationMin)).toEqual([120, 60]);
+  });
+
+  it("pre-filters oversized candidates by priority before planning", async () => {
+    const reasonOnly = Array.from({ length: 8 }, (_, index) => gp(`r${index}`, `理由${index}`, 121.02 + index * 0.01, 31, false));
+    const timed = { ...gp("timed", "有时间", 121.2, 31, false), timeHint: "上午" };
+    const verified = gp("verified", "已验证", 121.21, 31, true);
+    const grounded = [...reasonOnly, timed, verified];
+    const llm: LLMRunner = {
+      run: vi.fn(async (opts) => {
+        expect(opts.prompt).toContain('"id":"verified"');
+        expect(opts.prompt).toContain('"id":"timed"');
+        expect(opts.prompt).not.toContain('"id":"r6"');
+        expect(opts.prompt).not.toContain('"id":"r7"');
+        return JSON.stringify({ days: [{ slots: { morning: ["verified"], afternoon: ["timed"], evening: [] } }] });
+      })
+    };
+
+    const result = await runPlan(
+      grounded,
+      [],
+      { ...input, days: { base: 1, flex: 0 }, pace: "moderate" },
+      llm,
+      mapWithRoute(async () => ({ durationMin: 5, distanceKm: 1 }))
+    );
+
+    expect(result.filtered.filter((item) => item.reason.includes("行程容量")).map((item) => item.name)).toEqual(["理由6", "理由7"]);
+  });
+
+  it("deterministically repairs overload and backtracking using the 720/90/1.5 thresholds", async () => {
+    const grounded = [
+      { ...gp("a", "A", 0, 0), suggestedDuration: "300分钟" },
+      { ...gp("b", "B", 3, 0), suggestedDuration: "300分钟" },
+      { ...gp("c", "C", 1, 0), suggestedDuration: "300分钟" },
+      { ...gp("d", "D", 2, 0), suggestedDuration: "300分钟" }
+    ];
+
+    const result = await runPlan(
+      grounded,
+      [],
+      { ...input, days: { base: 1, flex: 0 } },
+      llmWith({ days: [{ slots: { morning: ["a", "b"], afternoon: ["c", "d"], evening: [] } }] }),
+      mapWithRoute(async () => ({ durationMin: 5, distanceKm: 1 }))
+    );
+    const day = result.days[0];
+    const totalMin = day.items.reduce((sum, item) => sum + item.durationMin + (item.transportToNext?.durationMin ?? 0), 0);
+    const maxSegment = Math.max(0, ...day.items.map((item) => item.transportToNext?.durationMin ?? 0));
+    const points = day.items.map((item) => item.location).filter(Boolean) as { lng: number; lat: number }[];
+
+    expect(totalMin).toBeLessThanOrEqual(720);
+    expect(maxSegment).toBeLessThanOrEqual(90);
+    expect(backtrackRatio(points)).toBeLessThanOrEqual(1.5);
+    expect(result.filtered.some((item) => item.reason.includes("超载兜底裁剪"))).toBe(true);
+    expect(result.warnings.some((warning) => warning.includes("兜底"))).toBe(true);
+  });
+
+  it("keeps transitively clustered members adjacent during slot sorting", async () => {
+    const grounded = [
+      gp("a", "A", 0, 0),
+      gp("b", "B", 0, 0.0018),
+      gp("c", "C", 0, 0.0036),
+      gp("x", "X", 0, 0.0027)
+    ];
+
+    const result = await runPlan(
+      grounded,
+      [],
+      { ...input, days: { base: 1, flex: 0 } },
+      llmWith({ days: [{ slots: { morning: ["a", "x"], afternoon: [], evening: [] } }] }),
+      mapWithRoute(async () => ({ durationMin: 5, distanceKm: 1 }))
+    );
+    const names = result.days[0].items.map((item) => item.name);
+    const clusterIndexes = ["A", "B", "C"].map((name) => names.indexOf(name));
+
+    expect(Math.max(...clusterIndexes) - Math.min(...clusterIndexes)).toBe(2);
   });
 });
 

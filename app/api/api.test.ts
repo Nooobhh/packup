@@ -139,6 +139,32 @@ describe("PATCH /api/trips/[id]/plan", () => {
     expect(ok.status).toBe(200);
     expect(route).toHaveBeenCalledTimes(1);
   });
+
+  it("uses drive when recomputed public transport is over 90 minutes and drive is faster", async () => {
+    await writePatchTrip("trip-patch-drive");
+    const route = vi.fn(async (_from, _to, mode) => (mode === "drive" ? { durationMin: 35, distanceKm: 5 } : { durationMin: 95, distanceKm: 5 }));
+    (globalThis as typeof globalThis & { __packupPatchMapForTest?: unknown }).__packupPatchMapForTest = { route };
+
+    const res = await PATCH_PLAN(new Request("http://test", { method: "PATCH", body: JSON.stringify({ op: "reorder", day: 1, orderedIds: ["p1", "p3", "p2", "p4"] }) }), { params: Promise.resolve({ id: "trip-patch-drive" }) });
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(route).toHaveBeenCalledWith(expect.anything(), expect.anything(), "public");
+    expect(route).toHaveBeenCalledWith(expect.anything(), expect.anything(), "drive");
+    expect(json.days[0].items.some((item: { transportToNext?: { mode?: string } }) => item.transportToNext?.mode === "drive")).toBe(true);
+  });
+
+  it("does not lose items when stored plan has non-adjacent duplicate cluster keys", async () => {
+    await writeDiscontinuousClusterTrip("trip-patch-cluster");
+    const route = vi.fn().mockResolvedValue({ durationMin: 10, distanceKm: 1 });
+    (globalThis as typeof globalThis & { __packupPatchMapForTest?: unknown }).__packupPatchMapForTest = { route };
+
+    const res = await PATCH_PLAN(new Request("http://test", { method: "PATCH", body: JSON.stringify({ op: "reorder", day: 1, orderedIds: ["c1", "x", "y"] }) }), { params: Promise.resolve({ id: "trip-patch-cluster" }) });
+    const saved = JSON.parse(await readFile(path.join(dataRoot, "trip-patch-cluster", "40-plan.json"), "utf8"));
+
+    expect(res.status).toBe(400);
+    expect(saved.days[0].items.map((item: { id: string }) => item.id)).toEqual(["a", "x", "b", "y"]);
+  });
 });
 
 describe("GET /api/trips/[id]", () => {
@@ -207,6 +233,21 @@ async function writePatchTrip(id: string) {
       location: { lng: 121 + index * 0.02, lat: 31 },
       transportToNext: index < 3 ? { mode: "public", durationMin: 10, distanceKm: 1 } : undefined
     })) }],
+    filtered: [],
+    warnings: []
+  }), "utf8");
+}
+
+async function writeDiscontinuousClusterTrip(id: string) {
+  const dir = path.join(dataRoot, id);
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, "40-plan.json"), JSON.stringify({
+    days: [{ index: 1, items: [
+      { id: "a", poiId: "a", name: "a", clusterKey: "c1", durationMin: 60, location: { lng: 121, lat: 31 } },
+      { id: "x", poiId: "x", name: "x", clusterKey: "x", durationMin: 60, location: { lng: 121.02, lat: 31 } },
+      { id: "b", poiId: "b", name: "b", clusterKey: "c1", durationMin: 60, location: { lng: 121.04, lat: 31 } },
+      { id: "y", poiId: "y", name: "y", clusterKey: "y", durationMin: 60, location: { lng: 121.06, lat: 31 } }
+    ] }],
     filtered: [],
     warnings: []
   }), "utf8");

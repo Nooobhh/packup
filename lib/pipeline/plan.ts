@@ -222,7 +222,7 @@ function orderDaySlots(day: PlanDay) {
   const ordered: PlanItem[] = [];
   for (const slot of SLOT_ORDER) {
     const items = day.items.filter((item) => item.slot === slot);
-    ordered.push(...nearestItemOrder(items, ordered.at(-1)));
+    ordered.push(...nearestClusterOrder(items, ordered.at(-1)).flatMap((group) => group.items));
   }
   day.items = ordered;
 }
@@ -232,33 +232,38 @@ async function fillAdjacentRoutes(plan: TripPlan, input: TripInput, map: MapProv
   for (const day of plan.days) {
     for (const item of day.items) item.transportToNext = undefined;
     for (let i = 0; i < day.items.length - 1; i++) {
-      const fromItem = day.items[i];
-      const toItem = day.items[i + 1];
-      const from = itemLocation(fromItem);
-      const to = itemLocation(toItem);
-      if (!from || !to) continue;
-      const directKm = haversineKm(from, to);
-      if (fromItem.clusterKey && fromItem.clusterKey === toItem.clusterKey) {
-        fromItem.transportToNext = { mode: "walk", durationMin: Math.min(5, Math.max(1, Math.round((directKm / 5) * 60))), distanceKm: directKm };
-        continue;
-      }
-      if (Date.now() >= deadline) {
-        fromItem.transportToNext = estimateWalk(directKm);
-        continue;
-      }
-      const preferred = directKm < 0.8 ? "walk" : input.transport ?? "public";
-      let route = await map.route(from, to, preferred);
-      let mode = preferred;
-      if (preferred === "public" && route.durationMin > 90 && Date.now() < deadline) {
-        const drive = await map.route(from, to, "drive");
-        if (drive.durationMin < route.durationMin) {
-          route = drive;
-          mode = "drive";
-        }
-      }
-      fromItem.transportToNext = { ...route, mode };
+      const route = await recommendLegTransport(day.items[i], day.items[i + 1], input, map, deadline);
+      if (route) day.items[i].transportToNext = route;
     }
   }
+}
+
+export async function recommendLegTransport(
+  fromItem: PlanItem,
+  toItem: PlanItem,
+  input: Pick<TripInput, "transport">,
+  map: Pick<MapProvider, "route">,
+  deadline = Number.POSITIVE_INFINITY
+) {
+  const from = itemLocation(fromItem);
+  const to = itemLocation(toItem);
+  if (!from || !to) return undefined;
+  const directKm = haversineKm(from, to);
+  if (fromItem.clusterKey && fromItem.clusterKey === toItem.clusterKey) {
+    return { mode: "walk" as const, durationMin: Math.min(5, Math.max(1, Math.round((directKm / 5) * 60))), distanceKm: directKm };
+  }
+  if (Date.now() >= deadline) return estimateWalk(directKm);
+  const preferred = directKm < 0.8 ? "walk" : input.transport ?? "public";
+  let route = await map.route(from, to, preferred);
+  let mode = preferred;
+  if (preferred === "public" && route.durationMin > 90 && Date.now() < deadline) {
+    const drive = await map.route(from, to, "drive");
+    if (drive.durationMin < route.durationMin) {
+      route = drive;
+      mode = "drive";
+    }
+  }
+  return { ...route, mode };
 }
 
 function findViolations(plan: TripPlan) {
@@ -289,7 +294,7 @@ async function fallbackPlan(plan: TripPlan, input: TripInput, map: MapProvider) 
   for (const day of plan.days) {
     const points = day.items.map(itemLocation).filter(Boolean) as LngLat[];
     if (backtrackRatio(points) > 1.5) {
-      day.items = nearestItemOrder(day.items);
+      day.items = nearestClusterOrder(day.items).flatMap((group) => group.items);
       warnings.add("兜底: 已按最近邻重排折返日程");
     }
     await fillAdjacentRoutes({ ...plan, days: [day] }, input, map);
@@ -337,6 +342,53 @@ function nearestItemOrder(items: PlanItem[], start?: PlanItem) {
     ordered.push(current);
   }
   return ordered;
+}
+
+function nearestClusterOrder(items: PlanItem[], start?: PlanItem) {
+  const groups = clusterItemGroups(items);
+  if (groups.length < 2) return groups;
+  const ordered: Array<{ key: string; items: PlanItem[] }> = [];
+  const remaining = [...groups];
+  let current = start;
+  if (!current) {
+    const first = remaining.shift()!;
+    ordered.push(first);
+    current = first.items.at(-1);
+  }
+  while (remaining.length) {
+    const currentLocation = current ? itemLocation(current) : undefined;
+    let bestIndex = 0;
+    let bestDistance = Infinity;
+    for (let i = 0; i < remaining.length; i++) {
+      const next = remaining[i].items.find((item) => itemLocation(item));
+      const nextLocation = next ? itemLocation(next) : undefined;
+      const distance = currentLocation && nextLocation ? haversineKm(currentLocation, nextLocation) : Number.MAX_SAFE_INTEGER;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = i;
+      }
+    }
+    const group = remaining.splice(bestIndex, 1)[0];
+    ordered.push(group);
+    current = group.items.at(-1);
+  }
+  return ordered;
+}
+
+function clusterItemGroups(items: PlanItem[]) {
+  const groups: Array<{ key: string; items: PlanItem[] }> = [];
+  const byKey = new Map<string, PlanItem[]>();
+  for (const item of items) {
+    const key = item.clusterKey ?? itemId(item);
+    const group = byKey.get(key);
+    if (group) group.push(item);
+    else {
+      const next = [item];
+      byKey.set(key, next);
+      groups.push({ key, items: next });
+    }
+  }
+  return groups;
 }
 
 function nearestGroupOrder(groups: Array<[string, GroundedPoi[]]>) {
@@ -434,6 +486,10 @@ function itemLocation(item: PlanItem): LngLat | undefined {
 
 function itemName(item: PlanItem) {
   return item.name ?? item.poi?.name ?? item.poiId ?? "未命名 POI";
+}
+
+function itemId(item: PlanItem) {
+  return item.poiId ?? item.id ?? item.name ?? itemName(item);
 }
 
 function poiKey(poi: GroundedPoi) {
