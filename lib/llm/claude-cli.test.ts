@@ -83,3 +83,17 @@ describe("ClaudeCliRunner", () => {
     ).resolves.toBe("hello");
   });
 });
+
+describe("stdout error extraction", () => {
+  it("surfaces usage-limit style errors from stdout JSON on nonzero exit", async () => {
+    const runner = new ClaudeCliRunner({
+      execClaude: vi.fn().mockRejectedValue(
+        Object.assign(new Error("Command failed: claude -p ..."), {
+          stderr: "",
+          stdout: JSON.stringify({ is_error: true, result: "You've hit your usage limit · resets 8:30pm" })
+        })
+      )
+    });
+    await expect(runner.run({ prompt: "x", timeoutMs: 1 })).rejects.toThrow(/usage limit/);
+  });
+});

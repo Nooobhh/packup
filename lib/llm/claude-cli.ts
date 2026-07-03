@@ -32,8 +32,12 @@ export class ClaudeCliRunner implements LLMRunner {
       return unwrapClaudeJson(result.stdout);
     } catch (error) {
       if (isTimeout(error)) throw new LLMTimeoutError(`claude CLI timed out after ${opts.timeoutMs}ms`);
-      const stderr = typeof error === "object" && error && "stderr" in error ? String((error as { stderr?: unknown }).stderr ?? "") : "";
-      if (stderr.trim()) throw new Error(stderr.trim());
+      const errObj = (typeof error === "object" && error ? error : {}) as { stderr?: unknown; stdout?: unknown };
+      const stderr = String(errObj.stderr ?? "").trim();
+      if (stderr) throw new Error(stderr);
+      // claude 非零退出时错误常在 stdout 的 JSON(如 usage limit),提取出来别让报错只剩命令回显
+      const stdoutTail = extractErrorFromStdout(String(errObj.stdout ?? ""));
+      if (stdoutTail) throw new Error(`claude CLI failed: ${stdoutTail}`);
       throw error;
     }
   }
@@ -101,6 +105,19 @@ function unwrapClaudeJson(stdout: string) {
     return trimmed;
   }
   return trimmed;
+}
+
+function extractErrorFromStdout(stdout: string) {
+  const trimmed = stdout.trim();
+  if (!trimmed) return "";
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    const result = typeof parsed.result === "string" ? parsed.result : "";
+    if (parsed.is_error || result) return result.slice(0, 300) || JSON.stringify(parsed).slice(0, 300);
+  } catch {
+    return trimmed.slice(-300);
+  }
+  return "";
 }
 
 function isTimeout(error: unknown) {
