@@ -50,6 +50,48 @@ describe("AmapRestProvider", () => {
     ).rejects.toThrow("10001");
   });
 
+  it("searchPois returns multiple hits using a single text search with offset limit", async () => {
+    const fetchJson = vi.fn().mockResolvedValue({
+      status: "1",
+      pois: [
+        { id: "p1", name: "外滩", location: "121.4903,31.2417", address: "中山东一路", cityname: "上海市" },
+        { id: "p2", name: "豫园", location: "121.492,31.227", business: { opentime_today: "09:00-18:00", rating: "4.7" } }
+      ]
+    });
+    const provider = new AmapRestProvider({ env: { AMAP_REST_KEY: "k" }, fetchJson });
+
+    await expect(provider.searchPois("景点", "上海", 12)).resolves.toEqual([
+      {
+        amapId: "p1",
+        name: "外滩",
+        location: { lng: 121.4903, lat: 31.2417 },
+        address: "中山东一路",
+        cityName: "上海市",
+        openHours: undefined,
+        rating: undefined
+      },
+      {
+        amapId: "p2",
+        name: "豫园",
+        location: { lng: 121.492, lat: 31.227 },
+        address: undefined,
+        cityName: undefined,
+        openHours: "09:00-18:00",
+        rating: "4.7"
+      }
+    ]);
+    expect(fetchJson).toHaveBeenCalledTimes(1);
+    expect(fetchJson.mock.calls[0][0]).toContain("/place/text");
+    expect(fetchJson.mock.calls[0][0]).toContain("offset=10");
+    expect(fetchJson.mock.calls[0][0]).not.toContain("/place/detail");
+  });
+
+  it("searchPois returns an empty array when text search has no hits", async () => {
+    const provider = new AmapRestProvider({ env: { AMAP_REST_KEY: "k" }, fetchJson: vi.fn().mockResolvedValue({ status: "1", pois: [] }) });
+
+    await expect(provider.searchPois("不存在", "上海")).resolves.toEqual([]);
+  });
+
   it("routes public, drive, and walk modes with mapped endpoints and parsed duration/distance", async () => {
     const fetchJson = vi.fn().mockResolvedValue({ status: "1", route: { paths: [{ duration: "600", distance: "3200" }] } });
     const provider = new AmapRestProvider({ env: { AMAP_REST_KEY: "k" }, fetchJson });
@@ -61,6 +103,51 @@ describe("AmapRestProvider", () => {
     expect(fetchJson.mock.calls[0][0]).toContain("/direction/driving");
     expect(fetchJson.mock.calls[1][0]).toContain("/direction/walking");
     expect(fetchJson.mock.calls[2][0]).toContain("/direction/transit/integrated");
+  });
+
+  it("routes bike mode through v4 bicycling and parses v4 response fields", async () => {
+    const fetchJson = vi.fn().mockResolvedValue({
+      errcode: 0,
+      data: {
+        paths: [
+          {
+            duration: 720,
+            distance: 2400,
+            steps: [{ polyline: "121.1,31.1;121.2,31.2" }, { polyline: "121.2,31.2;121.3,31.3" }]
+          }
+        ]
+      }
+    });
+    const provider = new AmapRestProvider({ env: { AMAP_REST_KEY: "k" }, fetchJson });
+
+    await expect(provider.route({ lng: 1, lat: 2 }, { lng: 3, lat: 4 }, "bike")).resolves.toEqual({
+      durationMin: 12,
+      distanceKm: 2.4,
+      polyline: [
+        { lng: 121.1, lat: 31.1 },
+        { lng: 121.2, lat: 31.2 },
+        { lng: 121.3, lat: 31.3 }
+      ]
+    });
+    expect(fetchJson.mock.calls[0][0]).toContain("/v4/direction/bicycling");
+  });
+
+  it("falls back to bike estimate on v4 error or empty paths", async () => {
+    const providerWithError = new AmapRestProvider({
+      env: { AMAP_REST_KEY: "k" },
+      fetchJson: vi.fn().mockResolvedValue({ errcode: 10001, errmsg: "bad key" })
+    });
+    const providerWithEmptyPaths = new AmapRestProvider({
+      env: { AMAP_REST_KEY: "k" },
+      fetchJson: vi.fn().mockResolvedValue({ errcode: 0, data: { paths: [] } })
+    });
+
+    await expect(providerWithError.route({ lng: 121, lat: 31 }, { lng: 121.001, lat: 31 }, "bike")).resolves.toMatchObject({
+      durationMin: 3
+    });
+    await expect(providerWithEmptyPaths.route({ lng: 121, lat: 31 }, { lng: 121.001, lat: 31 }, "bike")).resolves.toMatchObject({
+      durationMin: 3
+    });
   });
 
   it("parses and dedupes driving step polylines", async () => {

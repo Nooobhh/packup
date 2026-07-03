@@ -65,7 +65,23 @@ export class AmapRestProvider implements MapProvider {
     };
   }
 
+  async searchPois(keyword: string, city: string, limit = 8): Promise<AmapPoi[]> {
+    const offset = String(Math.min(10, Math.max(1, Math.floor(limit))));
+    const url = this.url("/v3/place/text", {
+      keywords: keyword,
+      city,
+      citylimit: "true",
+      offset,
+      extensions: "all"
+    });
+    const search = await this.call(url);
+    assertAmapOk(search);
+    return array(search.pois).map((poi) => poiFromRecord(poi as Record<string, unknown>, keyword));
+  }
+
   async route(from: LngLat, to: LngLat, mode: TransportMode): Promise<{ durationMin: number; distanceKm: number; polyline?: LngLat[] }> {
+    if (mode === "bike") return this.bikeRoute(from, to);
+
     const endpoint =
       mode === "drive" ? "/v3/direction/driving" : mode === "walk" ? "/v3/direction/walking" : "/v3/direction/transit/integrated";
     const response = await this.call(
@@ -85,6 +101,24 @@ export class AmapRestProvider implements MapProvider {
     const durationMin = Math.round(number(path.duration) / 60);
     if (distanceKm === 0 && durationMin === 0) return estimateWalk(from, to);
     const polyline = mode === "public" ? transitPolyline(path) : pathPolyline(path);
+    return polyline.length > 0 ? { durationMin, distanceKm, polyline } : { durationMin, distanceKm };
+  }
+
+  private async bikeRoute(from: LngLat, to: LngLat) {
+    const response = await this.call(
+      this.url("/v4/direction/bicycling", {
+        origin: formatLngLat(from),
+        destination: formatLngLat(to)
+      })
+    );
+    if (numberOrUndefined(response.errcode) !== 0) return estimateBike(from, to);
+    const data = response.data as Record<string, unknown> | undefined;
+    const path = array(data?.paths)[0] as Record<string, unknown> | undefined;
+    if (!path) return estimateBike(from, to);
+    const distanceKm = number(path.distance) / 1000;
+    const durationMin = Math.round(number(path.duration) / 60);
+    if (distanceKm === 0 && durationMin === 0) return estimateBike(from, to);
+    const polyline = pathPolyline(path);
     return polyline.length > 0 ? { durationMin, distanceKm, polyline } : { durationMin, distanceKm };
   }
 
@@ -134,6 +168,24 @@ function estimateWalk(from: LngLat, to: LngLat) {
   const distanceKm = haversineKm(from, to) * 1.3;
   const durationMin = Math.max(5, Math.round((distanceKm / 5) * 60));
   return { durationMin, distanceKm };
+}
+
+function estimateBike(from: LngLat, to: LngLat) {
+  const distanceKm = haversineKm(from, to) * 1.3;
+  const durationMin = Math.max(3, Math.round((distanceKm / 12) * 60));
+  return { durationMin, distanceKm };
+}
+
+function poiFromRecord(poi: Record<string, unknown>, fallbackName: string): AmapPoi {
+  return {
+    amapId: string(poi.id) || fallbackName,
+    name: string(poi.name) || fallbackName,
+    location: parseLocation(string(poi.location)),
+    address: string(poi.address) || undefined,
+    cityName: string(poi.cityname) || string(poi.cityName) || undefined,
+    openHours: businessField(poi, ["opentime_today", "open_time", "business_hours"]),
+    rating: businessField(poi, ["rating", "score"])
+  };
 }
 
 function pathPolyline(path: Record<string, unknown>): LngLat[] {
@@ -206,6 +258,11 @@ function number(value: unknown) {
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed)) throw new Error("Amap numeric field missing");
   return parsed;
+}
+
+function numberOrUndefined(value: unknown) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function parseLocation(value: string): LngLat {

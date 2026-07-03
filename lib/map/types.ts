@@ -12,6 +12,7 @@ export type AmapPoi = {
 
 export interface MapProvider {
   searchPoi(name: string, city: string): Promise<AmapPoi | null>;
+  searchPois?(keyword: string, city: string, limit?: number): Promise<AmapPoi[]>;
   route(from: LngLat, to: LngLat, mode: TransportMode): Promise<{ durationMin: number; distanceKm: number; polyline?: LngLat[] }>;
 }
 
