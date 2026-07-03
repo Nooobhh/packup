@@ -1,4 +1,5 @@
 import type { MapProvider } from "@/lib/map/types";
+import { BUDGETS } from "./budgets";
 import type { CandidatePoi, FilteredItem, GroundedPoi, TripInput } from "./types";
 import { FilteredItemSchema, GroundedPoiSchema } from "./types";
 
@@ -10,11 +11,26 @@ export async function runGround(
   const grounded: GroundedPoi[] = [];
   const filtered: FilteredItem[] = [];
   const byAmapId = new Map<string, GroundedPoi>();
+  const noteCounts = new Map<string, number>();
+  const deadline = Date.now() + BUDGETS.groundStageMs;
+  let expired = false;
 
   for (const poi of pois) {
-    const hit = await searchWithRetry(poi, input.destination, map);
+    const noteIndex = (noteCounts.get(poi.sourceNoteId) ?? 0) + 1;
+    noteCounts.set(poi.sourceNoteId, noteIndex);
+    if (expired || Date.now() >= deadline) {
+      expired = true;
+      grounded.push(unverifiedPoi(poi, noteIndex));
+      continue;
+    }
+    const hit = await withDeadline(searchWithRetry(poi, input.destination, map), deadline);
+    if (hit === "deadline") {
+      expired = true;
+      grounded.push(unverifiedPoi(poi, noteIndex));
+      continue;
+    }
     if (!hit) {
-      grounded.push(GroundedPoiSchema.parse({ ...poi, verified: false }));
+      grounded.push(unverifiedPoi(poi, noteIndex));
       continue;
     }
 
@@ -32,6 +48,7 @@ export async function runGround(
 
     const candidate = GroundedPoiSchema.parse({
       ...poi,
+      id: hit.amapId,
       verified: true,
       amapId: hit.amapId,
       name: hit.name || poi.name,
@@ -61,6 +78,17 @@ export async function runGround(
   }
 
   return { grounded, filtered };
+}
+
+function unverifiedPoi(poi: CandidatePoi, noteIndex: number) {
+  return GroundedPoiSchema.parse({ ...poi, id: `unverified-${poi.sourceNoteId}-${noteIndex}`, verified: false });
+}
+
+async function withDeadline<T>(promise: Promise<T>, deadline: number): Promise<T | "deadline"> {
+  promise.catch(() => undefined);
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return "deadline";
+  return Promise.race([promise, new Promise<"deadline">((resolve) => setTimeout(() => resolve("deadline"), remaining))]);
 }
 
 async function searchWithRetry(poi: CandidatePoi, city: string, map: MapProvider) {

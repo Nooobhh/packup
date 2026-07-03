@@ -1,9 +1,25 @@
 import type { LLMRunner } from "@/lib/llm/types";
 import type { MapProvider } from "@/lib/map/types";
-import { buildPlanPrompt, type PlanViolationDetail } from "@/lib/prompts/plan";
-import { backtrackRatio, haversineKm, nearestNeighborEdges } from "./geo";
-import type { FilteredItem, GroundedPoi, LngLat, PlanDay, PlanItem, TripInput, TripPlan } from "./types";
+import { buildPlanPrompt, type PlanPromptPoi, type PlanViolationDetail } from "@/lib/prompts/plan";
+import { BUDGETS } from "./budgets";
+import { backtrackRatio, clusterByDistance, haversineKm } from "./geo";
+import type { FilteredItem, GroundedPoi, LngLat, PlanDay, PlanItem, Slot, TripInput, TripPlan } from "./types";
 import { FilteredItemSchema, TripPlanSchema } from "./types";
+
+const SLOT_ORDER: Slot[] = ["morning", "afternoon", "evening"];
+const DEFAULT_DURATION: Record<string, number> = {
+  sight: 90,
+  food: 60,
+  shop: 45,
+  stay: 30,
+  experience: 120,
+  other: 60
+};
+
+type PlannerOutput = {
+  days: Array<{ theme?: string; slots: Record<Slot, string[]> }>;
+  daysDecision?: TripPlan["daysDecision"];
+};
 
 export async function runPlan(
   grounded: GroundedPoi[],
@@ -12,162 +28,235 @@ export async function runPlan(
   llm: LLMRunner,
   map: MapProvider
 ): Promise<TripPlan> {
-  // 候选 POI 远超行程容量时(如 44 个排 3 天),LLM 消化全量既慢又无益:
-  // 按「每天上限 × 天数 + 余量」预算,分类型保留高优先级项,超额进 filtered。
   const { kept, budgetFiltered } = budgetPois(grounded, input);
-  const activeGrounded = kept;
   const preFiltered = [...upstreamFiltered, ...budgetFiltered];
+  const clusters = clusterByDistance(kept.map((poi) => ({ id: poiKey(poi), location: poi.location })));
+  const clusterGroups = groupByCluster(kept, clusters);
+  const context = buildContext(clusterGroups);
 
-  const context = await buildContext(activeGrounded, input, map);
-  let plan = await callPlanner(activeGrounded, preFiltered, input, llm, context);
-  plan = ensureDaysDecision(plan, input);
-  plan = enforceFlexibleDayRange(plan, input);
-  await fillAdjacentRoutes(plan, input, map);
-
-  let violations = findViolations(plan);
-  for (let repair = 0; violations.length > 0 && repair < 2; repair++) {
-    const previousPlan = plan;
-    plan = await callPlanner(activeGrounded, preFiltered, input, llm, context, undefined, violations, previousPlan);
-    plan = ensureDaysDecision(enforceFlexibleDayRange(plan, input), input);
-    await fillAdjacentRoutes(plan, input, map);
-    violations = findViolations(plan);
+  let warnings: string[] = [];
+  let planner: PlannerOutput | undefined;
+  try {
+    planner = await callPlanner(context.slimPois, input, llm, context.matrix);
+  } catch {
+    warnings.push("LLM 分天失败,已按地理就近自动分配");
   }
 
+  let plan = planner ? rehydratePlannerOutput(planner, kept, clusters, clusterGroups) : fallbackFromGrounded(kept, input, clusters, clusterGroups);
+  if (planner && allDaysEmpty(plan) && kept.length > 0) {
+    plan = fallbackFromGrounded(kept, input, clusters, clusterGroups);
+    warnings.push("LLM 分天失败,已按地理就近自动分配");
+  }
+
+  for (const day of plan.days) orderDaySlots(day);
+  plan = ensureDaysDecision(plan, input);
+  plan = enforceFlexibleDayRange(plan, input);
+  plan.filtered = [...preFiltered, ...plan.filtered];
+  plan.warnings = [...warnings, ...plan.warnings];
+
+  await fillAdjacentRoutes(plan, input, map);
+  const violations = findViolations(plan);
   if (violations.length > 0) {
     plan = await fallbackPlan(plan, input, map);
   }
-
-  plan.filtered = [...preFiltered, ...plan.filtered];
   addWarnings(plan, input);
   return TripPlanSchema.parse(plan);
 }
 
-// 按行程容量给 POI 定预算:每天上限(pace 决定)× 天数 × 1.5 余量,给 LLM 留选择空间但不淹没。
-// 分类型按优先级(已验证 > 有 timeHint > 有 reason)保留,超额移入 filtered。
 function budgetPois(grounded: GroundedPoi[], input: TripInput): { kept: GroundedPoi[]; budgetFiltered: FilteredItem[] } {
   const perDayMax = input.pace === "packed" ? 7 : input.pace === "relaxed" ? 3 : 5;
-  const days = input.days ? input.days.base + (input.days.flex ?? 0) : 4; // 缺省按 4 天估
+  const days = input.days ? input.days.base + (input.days.flex ?? 0) : 4;
   const budget = Math.ceil(perDayMax * days * 1.5);
   if (grounded.length <= budget) return { kept: grounded, budgetFiltered: [] };
 
   const score = (p: GroundedPoi) => (p.verified ? 4 : 0) + (p.timeHint ? 2 : 0) + (p.reason ? 1 : 0);
   const ranked = [...grounded].map((poi, index) => ({ poi, index, score: score(poi) })).sort((a, b) => b.score - a.score || a.index - b.index);
   const kept = ranked.slice(0, budget).sort((a, b) => a.index - b.index).map((item) => item.poi);
-  const budgetFiltered = ranked.slice(budget).map((item) => ({
-    name: item.poi.name,
-    sourceNoteId: item.poi.sourceNoteId,
-    stage: "plan" as const,
-    why: `候选 POI 超出 ${days} 天行程容量,优先级较低未纳入排程`
-  }));
+  const budgetFiltered = ranked.slice(budget).map((item) =>
+    FilteredItemSchema.parse({
+      name: item.poi.name,
+      sourceNoteId: item.poi.sourceNoteId,
+      stage: "plan",
+      reason: `候选 POI 超出 ${days} 天行程容量,优先级较低未纳入排程`,
+      why: `候选 POI 超出 ${days} 天行程容量,优先级较低未纳入排程`
+    })
+  );
   return { kept, budgetFiltered };
 }
 
-async function buildContext(grounded: GroundedPoi[], input: TripInput, map: MapProvider) {
-  const withLocations = grounded
-    .filter((poi) => poi.verified && poi.location)
-    .map((poi, index) => ({ id: poi.amapId ?? poi.id ?? `${poi.name}-${index}`, location: poi.location as LngLat, poi }));
-  // 全量两两矩阵会撑爆排程 prompt(43 POI ≈ 900 对),LLM 只需要「谁和谁近」:
-  // 每 POI 给 k=5 近邻(name + km),体积砍一个数量级。
-  const matrix = withLocations.map((item) => ({
-    name: item.poi.name,
-    near: withLocations
-      .filter((other) => other !== item)
-      .map((other) => ({ name: other.poi.name, km: Number(haversineKm(item.location, other.location).toFixed(2)) }))
-      .sort((a, b) => a.km - b.km)
-      .slice(0, 5)
+function buildContext(clusterGroups: Map<string, GroundedPoi[]>) {
+  const representatives = Array.from(clusterGroups, ([id, members]) => ({ id, members, location: firstLocation(members) }));
+  const matrix = representatives
+    .filter((item): item is typeof item & { location: LngLat } => Boolean(item.location))
+    .map((item) => ({
+      id: item.id,
+      name: item.members.map((member) => member.name).join(" + "),
+      near: representatives
+        .filter((other): other is typeof other & { location: LngLat } => other !== item && Boolean(other.location))
+        .map((other) => ({ id: other.id, name: other.members.map((member) => member.name).join(" + "), km: Number(haversineKm(item.location, other.location).toFixed(2)) }))
+        .sort((a, b) => a.km - b.km)
+        .slice(0, 5)
+    }));
+  const slimPois: PlanPromptPoi[] = representatives.map(({ id, members }) => ({
+    id,
+    name: members.map((member) => member.name).join(" + "),
+    type: members[0]?.type,
+    verified: members.every((member) => member.verified),
+    members: members.map((member) => member.name),
+    suggestedDuration: members.find((member) => member.suggestedDuration)?.suggestedDuration,
+    reason: members.map((member) => member.reason).join(" / ").slice(0, 100)
   }));
-  const byId = new Map(withLocations.map((item) => [item.id, item]));
-  const routeSamples = [];
-  for (const edge of nearestNeighborEdges(withLocations, 2).slice(0, 15)) {
-    const from = byId.get(edge.from);
-    const to = byId.get(edge.to);
-    if (!from || !to) continue;
-    const route = await map.route(from.location, to.location, input.transport ?? "public");
-    routeSamples.push({ from: from.poi.name, to: to.poi.name, ...route });
-  }
-  return { matrix, routeSamples };
+  return { matrix, slimPois };
 }
 
-async function callPlanner(
-  grounded: GroundedPoi[],
-  upstreamFiltered: FilteredItem[],
-  input: TripInput,
-  llm: LLMRunner,
-  context: { matrix: unknown; routeSamples: unknown },
-  validationError?: string,
-  violations?: PlanViolationDetail[],
-  previousPlan?: TripPlan
-): Promise<TripPlan> {
-  let lastError = validationError;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const raw = await llm.run({
-      prompt: buildPlanPrompt({
-        grounded,
-        upstreamFiltered,
-        input,
-        distanceMatrix: context.matrix,
-        routeSamples: context.routeSamples,
-        validationError: lastError,
-        violations,
-        previousPlan
-      }),
-      jsonSchema: planJsonSchema,
-      timeoutMs: 900_000
-    });
-    try {
-      return rehydratePlanItems(TripPlanSchema.parse(sanitizeRawPlan(JSON.parse(raw))), grounded);
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
-      if (attempt === 1) throw error;
-    }
-  }
-  throw new Error("unreachable planner retry state");
-}
-
-function rehydratePlanItems(plan: TripPlan, grounded: GroundedPoi[]) {
-  const byAmapId = new Map(grounded.filter((poi) => poi.amapId).map((poi) => [poi.amapId as string, poi]));
-  const byName = new Map(grounded.map((poi) => [poi.name, poi]));
-  const warnings = new Set(plan.warnings);
-
-  for (const day of plan.days) {
-    const kept: PlanItem[] = [];
-    for (const item of day.items) {
-      const amapId = item.poiId ?? item.poi?.amapId;
-      const name = item.name ?? item.poi?.name;
-      const source = (amapId ? byAmapId.get(amapId) : undefined) ?? (name ? byName.get(name) : undefined);
-      if (!source) {
-        warnings.add(`排程输出包含未经核实的条目已剔除: ${itemName(item)}`);
-        continue;
+async function callPlanner(slimPois: PlanPromptPoi[], input: TripInput, llm: LLMRunner, distanceMatrix: unknown): Promise<PlannerOutput> {
+  const raw = await llm.run({
+    prompt: buildPlanPrompt({ slimPois, input, distanceMatrix }),
+    jsonSchema: planJsonSchema,
+    timeoutMs: BUDGETS.planLlmMs
+  });
+  const parsed = JSON.parse(raw) as PlannerOutput;
+  if (!Array.isArray(parsed.days)) throw new Error("planner days missing");
+  return {
+    days: parsed.days.map((day) => ({
+      theme: day.theme,
+      slots: {
+        morning: Array.isArray(day.slots?.morning) ? day.slots.morning : [],
+        afternoon: Array.isArray(day.slots?.afternoon) ? day.slots.afternoon : [],
+        evening: Array.isArray(day.slots?.evening) ? day.slots.evening : []
       }
-      kept.push({
-        ...item,
-        poiId: source.amapId ?? source.id ?? item.poiId,
-        poi: source,
-        name: source.name,
-        type: source.type,
-        address: source.address,
-        openHours: source.openHours,
-        verified: source.verified,
-        location: source.location,
-        reason: source.reason
-      });
-    }
-    day.items = kept;
-  }
+    })),
+    daysDecision: parsed.daysDecision
+  };
+}
 
-  plan.warnings = Array.from(warnings);
-  return plan;
+function rehydratePlannerOutput(
+  planner: PlannerOutput,
+  grounded: GroundedPoi[],
+  clusters: Map<string, string>,
+  clusterGroups: Map<string, GroundedPoi[]>
+): TripPlan {
+  const byId = new Map<string, GroundedPoi>();
+  for (const poi of grounded) {
+    byId.set(poiKey(poi), poi);
+    if (poi.amapId) byId.set(poi.amapId, poi);
+    byId.set(poi.name, poi);
+  }
+  const warnings = new Set<string>();
+  const used = new Set<string>();
+  const days = planner.days.map((day, dayIndex): PlanDay => {
+    const items: PlanItem[] = [];
+    for (const slot of SLOT_ORDER) {
+      for (const ref of day.slots[slot] ?? []) {
+        const members = clusterGroups.get(ref) ?? (byId.get(ref) ? clusterGroups.get(clusters.get(byId.get(ref)!.id ?? byId.get(ref)!.amapId ?? byId.get(ref)!.name) ?? "") : undefined);
+        if (!members) {
+          warnings.add(`排程输出包含未经核实的 id 已剔除: ${ref}`);
+          continue;
+        }
+        for (const poi of members) {
+          const key = poiKey(poi);
+          if (used.has(key)) continue;
+          used.add(key);
+          items.push(planItemFromPoi(poi, slot, clusters.get(key) ?? key));
+        }
+      }
+    }
+    return { index: dayIndex + 1, theme: day.theme, items };
+  });
+  return { days, filtered: [], warnings: Array.from(warnings), daysDecision: planner.daysDecision };
+}
+
+function fallbackFromGrounded(
+  grounded: GroundedPoi[],
+  input: TripInput,
+  clusters: Map<string, string>,
+  clusterGroups: Map<string, GroundedPoi[]>
+): TripPlan {
+  const dayCount = Math.max(1, input.days?.base ?? Math.min(15, Math.max(1, Math.ceil(clusterGroups.size / 5))));
+  const orderedGroups = nearestGroupOrder(Array.from(clusterGroups.entries()));
+  const days: PlanDay[] = Array.from({ length: dayCount }, (_, index) => ({ index: index + 1, items: [] }));
+  orderedGroups.forEach(([clusterKey, members], groupIndex) => {
+    const day = days[groupIndex % dayCount];
+    const slot = SLOT_ORDER[Math.min(2, Math.floor(day.items.length / 2))];
+    for (const poi of members) {
+      const key = poiKey(poi);
+      day.items.push(planItemFromPoi(poi, slot, clusters.get(key) ?? clusterKey));
+    }
+  });
+  if (grounded.length > 0 && days.every((day) => day.items.length === 0)) {
+    const first = grounded[0];
+    const key = poiKey(first);
+    days[0].items.push(planItemFromPoi(first, "morning", clusters.get(key) ?? key));
+  }
+  return { days, filtered: [], warnings: [] };
+}
+
+function planItemFromPoi(poi: GroundedPoi, slot: Slot, clusterKey: string): PlanItem {
+  return {
+    id: poi.id ?? poi.amapId ?? poi.name,
+    poiId: poi.id ?? poi.amapId ?? poi.name,
+    poi,
+    name: poi.name,
+    type: poi.type,
+    slot,
+    clusterKey,
+    durationMin: durationForPoi(poi),
+    address: poi.address,
+    openHours: poi.openHours,
+    verified: poi.verified,
+    location: poi.location,
+    reason: poi.reason
+  };
+}
+
+function durationForPoi(poi: GroundedPoi) {
+  const text = poi.suggestedDuration ?? "";
+  const hours = text.match(/(\d+(?:\.\d+)?)\s*(小时|h)/i);
+  if (hours) return Math.round(Number(hours[1]) * 60);
+  const minutes = text.match(/(\d+)\s*(分钟|min)/i);
+  if (minutes) return Number(minutes[1]);
+  return DEFAULT_DURATION[poi.type] ?? DEFAULT_DURATION.other;
+}
+
+function orderDaySlots(day: PlanDay) {
+  const ordered: PlanItem[] = [];
+  for (const slot of SLOT_ORDER) {
+    const items = day.items.filter((item) => item.slot === slot);
+    ordered.push(...nearestItemOrder(items, ordered.at(-1)));
+  }
+  day.items = ordered;
 }
 
 async function fillAdjacentRoutes(plan: TripPlan, input: TripInput, map: MapProvider) {
+  const deadline = Date.now() + BUDGETS.planRoutesMs;
   for (const day of plan.days) {
     for (const item of day.items) item.transportToNext = undefined;
     for (let i = 0; i < day.items.length - 1; i++) {
-      const from = itemLocation(day.items[i]);
-      const to = itemLocation(day.items[i + 1]);
+      const fromItem = day.items[i];
+      const toItem = day.items[i + 1];
+      const from = itemLocation(fromItem);
+      const to = itemLocation(toItem);
       if (!from || !to) continue;
-      const route = await map.route(from, to, input.transport ?? "public");
-      day.items[i].transportToNext = { ...route, mode: input.transport ?? "public" };
+      const directKm = haversineKm(from, to);
+      if (fromItem.clusterKey && fromItem.clusterKey === toItem.clusterKey) {
+        fromItem.transportToNext = { mode: "walk", durationMin: Math.min(5, Math.max(1, Math.round((directKm / 5) * 60))), distanceKm: directKm };
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        fromItem.transportToNext = estimateWalk(directKm);
+        continue;
+      }
+      const preferred = directKm < 0.8 ? "walk" : input.transport ?? "public";
+      let route = await map.route(from, to, preferred);
+      let mode = preferred;
+      if (preferred === "public" && route.durationMin > 90 && Date.now() < deadline) {
+        const drive = await map.route(from, to, "drive");
+        if (drive.durationMin < route.durationMin) {
+          route = drive;
+          mode = "drive";
+        }
+      }
+      fromItem.transportToNext = { ...route, mode };
     }
   }
 }
@@ -178,37 +267,18 @@ function findViolations(plan: TripPlan) {
     const label = day.index ?? day.day ?? "?";
     const total = day.items.reduce((sum, item) => sum + item.durationMin + (item.transportToNext?.durationMin ?? 0), 0);
     if (total > 720) {
-      violations.push({
-        day: label,
-        metric: "day-total-min",
-        measured: total,
-        threshold: 720,
-        message: `第 ${label} 天超载 ${total}min`
-      });
+      violations.push({ day: label, metric: "day-total-min", measured: total, threshold: 720, message: `第 ${label} 天超载 ${total}min` });
     }
     day.items.forEach((item, index) => {
       const measured = item.transportToNext?.durationMin ?? 0;
       if (measured > 90) {
-        violations.push({
-          day: label,
-          segmentIndex: index + 1,
-          metric: "segment-transport-min",
-          measured,
-          threshold: 90,
-          message: `第 ${label} 天第 ${index + 1} 段交通 ${measured}min 超过90min`
-        });
+        violations.push({ day: label, segmentIndex: index + 1, metric: "segment-transport-min", measured, threshold: 90, message: `第 ${label} 天第 ${index + 1} 段交通 ${measured}min 超过90min` });
       }
     });
     const points = day.items.map(itemLocation).filter(Boolean) as LngLat[];
     const ratio = backtrackRatio(points);
     if (ratio > 1.5) {
-      violations.push({
-        day: label,
-        metric: "backtrack-ratio",
-        measured: Number(ratio.toFixed(2)),
-        threshold: 1.5,
-        message: `第 ${label} 天折返比 ${ratio.toFixed(2)}`
-      });
+      violations.push({ day: label, metric: "backtrack-ratio", measured: Number(ratio.toFixed(2)), threshold: 1.5, message: `第 ${label} 天折返比 ${ratio.toFixed(2)}` });
     }
   }
   return violations;
@@ -222,23 +292,13 @@ async function fallbackPlan(plan: TripPlan, input: TripInput, map: MapProvider) 
       day.items = nearestItemOrder(day.items);
       warnings.add("兜底: 已按最近邻重排折返日程");
     }
-  }
-  await fillAdjacentRoutes(plan, input, map);
-
-  for (const day of plan.days) {
+    await fillAdjacentRoutes({ ...plan, days: [day] }, input, map);
     while (findDayViolations(day).length > 0 && day.items.length > 0) {
       const removeIndex = lowestPriorityIndex(day.items);
       const [removed] = day.items.splice(removeIndex, 1);
-      plan.filtered.push(
-        FilteredItemSchema.parse({
-          name: itemName(removed),
-          sourceNoteId: removed.poi?.sourceNoteId,
-          stage: "plan",
-          reason: "超载兜底裁剪"
-        })
-      );
+      plan.filtered.push(FilteredItemSchema.parse({ name: itemName(removed), sourceNoteId: removed.poi?.sourceNoteId, stage: "plan", reason: "超载兜底裁剪" }));
       warnings.add("兜底: 超载日程已裁剪 POI");
-      await fillAdjacentRoutes(plan, input, map);
+      await fillAdjacentRoutes({ ...plan, days: [day] }, input, map);
     }
   }
   plan.warnings = Array.from(warnings);
@@ -255,17 +315,41 @@ function findDayViolations(day: PlanDay) {
   ].filter(Boolean);
 }
 
-function nearestItemOrder(items: PlanItem[]) {
-  if (items.length < 3) return items;
-  const ordered = [items[0]];
-  const remaining = items.slice(1);
+function nearestItemOrder(items: PlanItem[], start?: PlanItem) {
+  if (items.length < 2) return items;
+  const ordered: PlanItem[] = [];
+  const remaining = [...items];
+  let current = start ?? remaining.shift()!;
+  if (!start) ordered.push(current);
   while (remaining.length) {
-    const current = itemLocation(ordered[ordered.length - 1]);
+    const currentLocation = itemLocation(current);
     let bestIndex = 0;
     let bestDistance = Infinity;
     for (let i = 0; i < remaining.length; i++) {
       const next = itemLocation(remaining[i]);
-      const distance = current && next ? Math.hypot(current.lng - next.lng, current.lat - next.lat) : Number.MAX_SAFE_INTEGER;
+      const distance = currentLocation && next ? haversineKm(currentLocation, next) : Number.MAX_SAFE_INTEGER;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = i;
+      }
+    }
+    current = remaining.splice(bestIndex, 1)[0];
+    ordered.push(current);
+  }
+  return ordered;
+}
+
+function nearestGroupOrder(groups: Array<[string, GroundedPoi[]]>) {
+  if (groups.length < 2) return groups;
+  const ordered = [groups[0]];
+  const remaining = groups.slice(1);
+  while (remaining.length) {
+    const current = firstLocation(ordered.at(-1)![1]);
+    let bestIndex = 0;
+    let bestDistance = Infinity;
+    for (let i = 0; i < remaining.length; i++) {
+      const next = firstLocation(remaining[i][1]);
+      const distance = current && next ? haversineKm(current, next) : Number.MAX_SAFE_INTEGER;
       if (distance < bestDistance) {
         bestDistance = distance;
         bestIndex = i;
@@ -292,23 +376,7 @@ function lowestPriorityIndex(items: PlanItem[]) {
   return best;
 }
 
-// LLM 常把可选的 daysDecision 输出成 JSON null 或字面量 "null" 字符串,
-// 二者都过不了 zod union(string | object)。schema parse 前统一剥掉。
-function sanitizeRawPlan(raw: unknown): unknown {
-  if (!raw || typeof raw !== "object") return raw;
-  const obj = raw as Record<string, unknown>;
-  const dd = obj.daysDecision;
-  if (dd === null || (typeof dd === "string" && ["null", "none", "undefined", ""].includes(dd.trim().toLowerCase()))) {
-    delete obj.daysDecision;
-  }
-  return obj;
-}
-
 function ensureDaysDecision(plan: TripPlan, input: TripInput) {
-  // LLM 偶尔把「无决策」输出成字面量字符串,清洗掉避免页面渲染出 "null"
-  if (typeof plan.daysDecision === "string" && ["null", "none", "undefined", ""].includes(plan.daysDecision.trim().toLowerCase())) {
-    plan.daysDecision = undefined;
-  }
   if (!input.days && !plan.daysDecision) {
     plan.daysDecision = { actualDays: plan.days.length, reason: `按内容量与 ${input.pace ?? "moderate"} 节奏推荐 ${plan.days.length} 天` };
   }
@@ -340,16 +408,24 @@ function enforceFlexibleDayRange(plan: TripPlan, input: TripInput) {
 
 function addWarnings(plan: TripPlan, input: TripInput) {
   const warnings = new Set(plan.warnings);
-  if (plan.days.some((day) => day.items.some((item) => (item.verified ?? item.poi?.verified) === false))) {
-    warnings.add("未验证 POI 参与排程");
-  }
-  if (plan.days.some((day) => day.items.some((item) => !(item.openHours ?? item.poi?.openHours)))) {
-    warnings.add("部分 POI openHours 缺失");
-  }
-  if (input.dailyThemes && input.dailyThemes.length !== plan.days.length) {
-    warnings.add("主题数与实际天数不一致");
-  }
+  if (plan.days.some((day) => day.items.some((item) => (item.verified ?? item.poi?.verified) === false))) warnings.add("未验证 POI 参与排程");
+  if (plan.days.some((day) => day.items.some((item) => !(item.openHours ?? item.poi?.openHours)))) warnings.add("部分 POI openHours 缺失");
+  if (input.dailyThemes && input.dailyThemes.length !== plan.days.length) warnings.add("主题数与实际天数不一致");
   plan.warnings = Array.from(warnings);
+}
+
+function groupByCluster(grounded: GroundedPoi[], clusters: Map<string, string>) {
+  const groups = new Map<string, GroundedPoi[]>();
+  for (const poi of grounded) {
+    const key = poiKey(poi);
+    const clusterKey = clusters.get(key) ?? key;
+    groups.set(clusterKey, [...(groups.get(clusterKey) ?? []), poi]);
+  }
+  return groups;
+}
+
+function firstLocation(items: GroundedPoi[]) {
+  return items.find((item) => item.location)?.location;
 }
 
 function itemLocation(item: PlanItem): LngLat | undefined {
@@ -360,37 +436,39 @@ function itemName(item: PlanItem) {
   return item.name ?? item.poi?.name ?? item.poiId ?? "未命名 POI";
 }
 
+function poiKey(poi: GroundedPoi) {
+  return poi.id ?? poi.amapId ?? poi.name;
+}
+
+function allDaysEmpty(plan: TripPlan) {
+  return plan.days.every((day) => day.items.length === 0);
+}
+
+function estimateWalk(distanceKm: number) {
+  return { mode: "walk" as const, durationMin: Math.max(5, Math.round(((distanceKm * 1.3) / 5) * 60)), distanceKm: distanceKm * 1.3 };
+}
+
 const planJsonSchema = {
   type: "object",
-  required: ["days", "filtered", "warnings"],
+  required: ["days"],
   properties: {
     days: {
       type: "array",
       items: {
         type: "object",
-        required: ["items"],
         properties: {
-          index: { type: "number" },
-          day: { type: "number" },
-          date: { type: "string" },
           theme: { type: "string" },
-          items: {
-            type: "array",
-            items: {
-              type: "object",
-              required: ["name", "startTime", "durationMin"],
-              properties: {
-                name: { type: "string" },
-                startTime: { type: "string" },
-                durationMin: { type: "number" }
-              }
+          slots: {
+            type: "object",
+            properties: {
+              morning: { type: "array", items: { type: "string" } },
+              afternoon: { type: "array", items: { type: "string" } },
+              evening: { type: "array", items: { type: "string" } }
             }
           }
         }
       }
     },
-    filtered: { type: "array" },
-    warnings: { type: "array" },
-    daysDecision: { type: "string", description: "天数为浮动/缺省时的选择理由;固定天数时省略本字段" }
+    daysDecision: {}
   }
 };
