@@ -1,7 +1,14 @@
 import { z } from "zod";
 
-export const TransportModeSchema = z.enum(["public", "drive", "walk"]);
+export const TransportModeSchema = z.enum(["public", "drive", "walk", "bike"]);
 export type TransportMode = z.infer<typeof TransportModeSchema>;
+
+export const TransportPrefsSchema = z.object({
+  shortKm: z.number().positive().default(1),
+  shortMode: TransportModeSchema.default("walk"),
+  longMode: TransportModeSchema.default("public")
+});
+export type TransportPrefs = z.infer<typeof TransportPrefsSchema>;
 
 export const PaceSchema = z.enum(["packed", "moderate", "relaxed"]);
 export type Pace = z.infer<typeof PaceSchema>;
@@ -18,7 +25,7 @@ export type LngLat = z.infer<typeof LngLatSchema>;
 export const TripInputSchema = z
   .object({
     id: z.string().optional(),
-    links: z.array(z.string().min(1)).min(1).max(10),
+    links: z.array(z.string().min(1)).min(0).max(10).default([]),
     destination: z.string().min(1),
     days: z
       .object({
@@ -82,7 +89,7 @@ export const CandidatePoiSchema = z.object({
   suggestedDuration: z.string().optional(),
   timeHint: z.string().optional(),
   sourceNoteId: z.string(),
-  sourceType: z.enum(["text", "image"])
+  sourceType: z.enum(["text", "image", "manual"])
 });
 export type CandidatePoi = z.infer<typeof CandidatePoiSchema>;
 
@@ -176,9 +183,11 @@ export const TripPlanSchema = z.object({
   tripId: z.string().optional(),
   destination: z.string().optional(),
   days: z.array(PlanDaySchema).min(1),
+  pool: z.array(PlanItemSchema).default([]),
   filtered: z.array(FilteredItemSchema).default([]),
   daysDecision: DaysDecisionSchema.optional(),
-  warnings: z.array(z.string()).default([])
+  warnings: z.array(z.string()).default([]),
+  transportPrefs: TransportPrefsSchema.optional()
 });
 export type TripPlan = z.infer<typeof TripPlanSchema>;
 

@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  CandidatePoiSchema,
   PlanItemSchema,
   SelectionSchema,
   StageEventSchema,
+  TransportModeSchema,
+  TransportPrefsSchema,
   TransportToNextSchema,
   TripInputSchema,
   TripPlanSchema
@@ -30,8 +33,12 @@ describe("TripInputSchema", () => {
     expect(TripInputSchema.parse(valid).query).toBeUndefined();
   });
 
+  it("allows empty or omitted links for manual trip inputs", () => {
+    expect(TripInputSchema.parse({ ...valid, links: [] }).links).toEqual([]);
+    expect(TripInputSchema.parse({ destination: "上海" }).links).toEqual([]);
+  });
+
   it.each([
-    [{ ...valid, links: [] }, "zero links"],
     [{ ...valid, links: Array.from({ length: 11 }, (_, i) => `https://www.xiaohongshu.com/explore/${i}`) }, "eleven links"],
     [{ ...valid, days: { base: 15, flex: 1 } }, "sixteen total days"],
     [{ ...valid, days: undefined, dailyThemes: ["主题"] }, "themes without days"]
@@ -87,6 +94,15 @@ describe("TripPlanSchema", () => {
       "plan"
     ]);
   });
+
+  it("parses legacy plans without pool or transport preferences", () => {
+    const parsed = TripPlanSchema.parse({
+      days: [{ day: 1, items: [{ name: "外滩", durationMin: 60 }] }]
+    });
+
+    expect(parsed.pool).toEqual([]);
+    expect(parsed.transportPrefs).toBeUndefined();
+  });
 });
 
 describe("PlanItemSchema", () => {
@@ -96,6 +112,42 @@ describe("PlanItemSchema", () => {
       slot: "morning",
       durationMin: 60
     });
+  });
+
+  it("allows bike routes on plan items", () => {
+    expect(TransportModeSchema.parse("bike")).toBe("bike");
+    expect(
+      PlanItemSchema.parse({
+        name: "外滩",
+        durationMin: 60,
+        transportToNext: { mode: "bike", durationMin: 8, distanceKm: 1.4 }
+      }).transportToNext?.mode
+    ).toBe("bike");
+  });
+});
+
+describe("TransportPrefsSchema", () => {
+  it("applies defaults and rejects non-positive short distance", () => {
+    expect(TransportPrefsSchema.parse({})).toEqual({
+      shortKm: 1,
+      shortMode: "walk",
+      longMode: "public"
+    });
+    expect(() => TransportPrefsSchema.parse({ shortKm: 0 })).toThrow();
+  });
+});
+
+describe("CandidatePoiSchema", () => {
+  it("allows manual source POIs", () => {
+    expect(
+      CandidatePoiSchema.parse({
+        name: "手动地点",
+        type: "other",
+        reason: "手动添加",
+        sourceNoteId: "manual",
+        sourceType: "manual"
+      }).sourceType
+    ).toBe("manual");
   });
 });
 
