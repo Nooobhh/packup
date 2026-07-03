@@ -117,6 +117,69 @@ describe("PATCH /api/trips/[id]/plan canvas ops", () => {
     expect(multiset(await readPlan("trip-conserve"))).toEqual(initial);
   });
 
+  it("preserves multi-item cluster groups when removing a day item to the pool", async () => {
+    await writePlan("trip-cluster-remove", clusteredPlan());
+    setPatchMap(vi.fn().mockResolvedValue({ durationMin: 5, distanceKm: 1 }));
+    const initial = multiset(await readPlan("trip-cluster-remove"));
+
+    const res = await patch("trip-cluster-remove", { op: "remove-item", day: 1, itemId: "cluster-k" });
+    const plan = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(plan.days[0].items.map((entry: Item) => entry.id)).toEqual(["g1", "x", "y"]);
+    expect(plan.pool.map((entry: Item) => entry.id)).toEqual(["p0", "pca", "pcb", "g2a", "g2b"]);
+    expect(multiset(plan)).toEqual(initial);
+    expect(await readPlan("trip-cluster-remove")).toEqual(plan);
+  });
+
+  it("preserves multi-item cluster groups when moving across days", async () => {
+    await writePlan("trip-cluster-move", clusteredPlan());
+    setPatchMap(vi.fn().mockResolvedValue({ durationMin: 5, distanceKm: 1 }));
+    const initial = multiset(await readPlan("trip-cluster-move"));
+
+    const res = await patch("trip-cluster-move", { op: "move-item", fromDay: 1, toDay: 2, itemId: "cluster-k", toIndex: 0 });
+    const plan = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(plan.days[0].items.map((entry: Item) => entry.id)).toEqual(["g1", "x", "y"]);
+    expect(plan.days[1].items.map((entry: Item) => entry.id)).toEqual(["g2a", "g2b", "d2"]);
+    expect(multiset(plan)).toEqual(initial);
+    expect(await readPlan("trip-cluster-move")).toEqual(plan);
+  });
+
+  it("preserves multi-item cluster groups when adding from pool to a day", async () => {
+    await writePlan("trip-cluster-add", clusteredPlan());
+    setPatchMap(vi.fn().mockResolvedValue({ durationMin: 5, distanceKm: 1 }));
+    const initial = multiset(await readPlan("trip-cluster-add"));
+
+    const res = await patch("trip-cluster-add", { op: "add-item", day: 1, index: 1, poolItemId: "pool-cluster" });
+    const plan = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(plan.days[0].items.map((entry: Item) => entry.id)).toEqual(["g1", "pca", "pcb", "g2a", "g2b", "x", "y"]);
+    expect(plan.pool.map((entry: Item) => entry.id)).toEqual(["p0"]);
+    expect(multiset(plan)).toEqual(initial);
+    expect(await readPlan("trip-cluster-add")).toEqual(plan);
+  });
+
+  it("adds a searched POI to the pool without route calls as an allowed growth path", async () => {
+    await writePlan("trip-pool-add", basePlan());
+    const route = vi.fn().mockResolvedValue({ durationMin: 5, distanceKm: 1 });
+    setPatchMap(route);
+    const initial = multiset(await readPlan("trip-pool-add"));
+
+    const res = await patch("trip-pool-add", { op: "pool-add", poi: groundedPoi("manual-pool", "入池点", 121.09) });
+    const plan = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(route).not.toHaveBeenCalled();
+    expect(plan.pool.at(-1)).toMatchObject({ id: "manual-pool", poiId: "manual-pool", name: "入池点" });
+    expect(plan.pool.at(-1).slot).toBeUndefined();
+    expect(plan.pool.at(-1).transportToNext).toBeUndefined();
+    expect(multiset(plan)).toEqual([...initial, "manual-pool"].sort());
+    expect(await readPlan("trip-pool-add")).toEqual(plan);
+  });
+
   it("rejects bad boundaries without writing and keeps 409 protection for new ops", async () => {
     await writePlan("trip-bad", basePlan());
     setPatchMap(vi.fn().mockResolvedValue({ durationMin: 5, distanceKm: 1 }));
@@ -194,6 +257,29 @@ function basePlan(opts: { order?: string[] } = {}) {
       { index: 2, items: [items.d2] }
     ],
     pool: [items["pool-1"], items["pool-2"]].map((entry) => ({ ...entry, transportToNext: undefined })),
+    filtered: [],
+    warnings: []
+  };
+}
+
+function clusteredPlan() {
+  const entries = {
+    g1: item("g1", 121),
+    g2a: { ...item("g2a", 121.01), clusterKey: "cluster-k" },
+    g2b: { ...item("g2b", 121.011), clusterKey: "cluster-k" },
+    x: item("x", 121.02),
+    y: item("y", 121.03),
+    d2: item("d2", 121.04),
+    p0: item("p0", 121.05),
+    pca: { ...item("pca", 121.06), clusterKey: "pool-cluster" },
+    pcb: { ...item("pcb", 121.061), clusterKey: "pool-cluster" }
+  };
+  return {
+    days: [
+      { index: 1, items: [entries.g1, entries.g2a, entries.g2b, entries.x, entries.y] },
+      { index: 2, items: [entries.d2] }
+    ],
+    pool: [entries.p0, entries.pca, entries.pcb].map((entry) => ({ ...entry, slot: undefined, transportToNext: undefined })),
     filtered: [],
     warnings: []
   };

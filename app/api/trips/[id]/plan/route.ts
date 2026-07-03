@@ -28,6 +28,7 @@ const PatchSchema = z.discriminatedUnion("op", [
     poolItemId: z.string().optional(),
     poi: GroundedPoiSchema.optional()
   }),
+  z.object({ op: z.literal("pool-add"), poi: GroundedPoiSchema }),
   z.object({ op: z.literal("remove-item"), day: z.number().int().positive(), itemId: z.string().min(1) }),
   z.object({
     op: z.literal("move-item"),
@@ -84,6 +85,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       case "add-item":
         await applyAddItem(plan, patch.data, map);
         break;
+      case "pool-add":
+        applyPoolAdd(plan, patch.data.poi);
+        break;
       case "remove-item":
         await applyRemoveItem(plan, patch.data.day, patch.data.itemId, map);
         break;
@@ -126,6 +130,12 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   }
   await writeFile(file, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
   return Response.json(parsed);
+}
+
+function applyPoolAdd(plan: TripPlan, poi: z.infer<typeof GroundedPoiSchema>) {
+  const item = planItemFromPoi(poi, "morning", poi.id ?? poi.amapId ?? poi.name);
+  clearForPool([item]);
+  plan.pool.push(item);
 }
 
 async function applyAddItem(
@@ -308,8 +318,7 @@ function takeGroup(items: PlanItem[], target: string) {
 function takeGroupWithIndex(items: PlanItem[], target: string) {
   const group = findGroup(items, target);
   if (!group) throw new Error("itemId 不存在");
-  const [removed] = items.splice(group.index, group.items.length);
-  const removedGroup = [removed, ...items.splice(group.index, group.items.length - 1)].filter(Boolean);
+  const removedGroup = items.splice(group.index, group.items.length);
   return { group: removedGroup, index: group.index };
 }
 
