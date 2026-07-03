@@ -45,19 +45,21 @@ export class XhsHttpFetcher implements ContentFetcher {
       if (index > 0) await this.sleep(this.delayMs);
       const url = links[index];
       try {
-        const page = await this.fetchPage(url, { "user-agent": desktopChromeUa });
-        if (!page.ok) throw new Error(`HTTP ${page.status}`);
-        const html = await page.text();
-        const parsed = parseXhsHtml(html, page.url || url);
+        const parsed = await this.fetchNoteWithRetry(url);
         const images: string[] = [];
         await mkdir(path.join(workDir, "images", parsed.id), { recursive: true });
         for (let imageIndex = 0; imageIndex < parsed.imageUrls.length; imageIndex++) {
           const imageUrl = parsed.imageUrls[imageIndex];
           const fileName = `${imageIndex + 1}${imageExtension(imageUrl)}`;
           const relative = `images/${parsed.id}/${fileName}`;
-          const binary = await this.fetchBinary(imageUrl);
-          await writeFile(path.join(workDir, relative), Buffer.from(new Uint8Array(binary)));
-          images.push(relative);
+          try {
+            // 单图下载失败不废整篇笔记:正文已在手,少一张图仍可用
+            const binary = await this.fetchBinary(imageUrl);
+            await writeFile(path.join(workDir, relative), Buffer.from(new Uint8Array(binary)));
+            images.push(relative);
+          } catch {
+            // skip this image
+          }
         }
         notes.push(
           NoteSchema.parse({
@@ -74,6 +76,28 @@ export class XhsHttpFetcher implements ContentFetcher {
       }
     }
     return notes;
+  }
+
+  // 页面传输失败时退避重试一次(短链跳转+大页面偶发超时/瞬断)。
+  // 仅重试传输层错误;解析失败(空 noteDetailMap 等)是确定性的,重试无益,直接抛。
+  private async fetchNoteWithRetry(url: string) {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) await this.sleep(1500);
+      let html: string;
+      let landedUrl: string;
+      try {
+        const page = await this.fetchPage(url, { "user-agent": desktopChromeUa });
+        if (!page.ok) throw new Error(`HTTP ${page.status}`);
+        html = await page.text();
+        landedUrl = page.url || url;
+      } catch (error) {
+        lastError = error;
+        continue; // 传输层错误 → 重试
+      }
+      return parseXhsHtml(html, landedUrl); // 解析错误直接冒泡,不重试
+    }
+    throw lastError;
   }
 }
 

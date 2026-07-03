@@ -122,3 +122,23 @@ function htmlWithState(noteId: string, opts: { title?: string; desc?: string; im
     }
   }</script><script>after()</script></html>`;
 }
+
+describe("XhsHttpFetcher robustness", () => {
+  const html = `<html><script>window.__INITIAL_STATE__={"note":{"noteDetailMap":{"n1":{"note":{"title":"T","desc":"body text","imageList":[{"urlDefault":"https://cdn/x.jpg"}]}}}}}</script></html>`;
+  it("retries page fetch once on transient failure", async () => {
+    const fetchPage = vi.fn()
+      .mockRejectedValueOnce(new Error("terminated"))
+      .mockResolvedValueOnce({ ok: true, status: 200, url: "https://www.xiaohongshu.com/discovery/item/n1", text: async () => html });
+    const fetchBinary = vi.fn().mockResolvedValue(new ArrayBuffer(8));
+    const notes = await new XhsHttpFetcher({ fetchPage, fetchBinary, sleep: async () => {} }).fetch(["http://xhslink.com/o/a"], "/tmp/xhs-retry-test");
+    expect(fetchPage).toHaveBeenCalledTimes(2);
+    expect(notes[0].fetchStatus).toBe("ok");
+  });
+  it("keeps note ok when an image download fails", async () => {
+    const fetchPage = vi.fn().mockResolvedValue({ ok: true, status: 200, url: "https://www.xiaohongshu.com/discovery/item/n1", text: async () => html });
+    const fetchBinary = vi.fn().mockRejectedValue(new Error("image 403"));
+    const notes = await new XhsHttpFetcher({ fetchPage, fetchBinary, sleep: async () => {} }).fetch(["http://xhslink.com/o/a"], "/tmp/xhs-img-test");
+    expect(notes[0].fetchStatus).toBe("ok");
+    expect(notes[0].images).toEqual([]);
+  });
+});
