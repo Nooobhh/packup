@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import path from "node:path";
 import type { LLMRunner } from "@/lib/llm/types";
 import { buildExtractPrompt } from "@/lib/prompts/extract";
+import { BUDGETS } from "./budgets";
 import { runExtract } from "./extract";
 import type { Note, TripInput } from "./types";
 
@@ -82,6 +83,28 @@ describe("runExtract", () => {
     const failed: Note = { ...note("bad"), fetchStatus: "failed", failReason: "xhs failed" };
     const result = await runExtract([failed], input, { run: vi.fn() });
     expect(result).toEqual({ pois: [], filtered: [], failedNotes: [] });
+  });
+
+  it("returns completed notes and marks unfinished notes failed at the stage deadline", async () => {
+    const originalStage = BUDGETS.extractStageMs;
+    const originalPerNote = BUDGETS.extractPerNoteMs;
+    (BUDGETS as { extractStageMs: number; extractPerNoteMs: number }).extractStageMs = 10;
+    (BUDGETS as { extractStageMs: number; extractPerNoteMs: number }).extractPerNoteMs = 100;
+    try {
+      const run = vi.fn((opts: { prompt: string }) => {
+        if (opts.prompt.includes("slow")) return new Promise<string>((resolve) => setTimeout(() => resolve(JSON.stringify({ pois: [], filtered: [] })), 50));
+        return Promise.resolve(JSON.stringify({ pois: [poi("快点", "fast", "text")], filtered: [] }));
+      });
+
+      const result = await runExtract([note("slow"), note("fast")], input, { run });
+
+      expect(result.pois.map((item) => item.name)).toEqual(["快点"]);
+      expect(result.failedNotes).toEqual([expect.objectContaining({ noteId: "slow", reason: expect.stringContaining("超时") })]);
+      expect(result.failedNotes[0].reason.length).toBeLessThanOrEqual(200);
+    } finally {
+      (BUDGETS as { extractStageMs: number; extractPerNoteMs: number }).extractStageMs = originalStage;
+      (BUDGETS as { extractStageMs: number; extractPerNoteMs: number }).extractPerNoteMs = originalPerNote;
+    }
   });
 });
 

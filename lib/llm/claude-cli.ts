@@ -34,11 +34,10 @@ export class ClaudeCliRunner implements LLMRunner {
       if (isTimeout(error)) throw new LLMTimeoutError(`claude CLI timed out after ${opts.timeoutMs}ms`);
       const errObj = (typeof error === "object" && error ? error : {}) as { stderr?: unknown; stdout?: unknown };
       const stderr = String(errObj.stderr ?? "").trim();
-      if (stderr) throw new Error(stderr);
+      if (stderr) throw new Error(`claude CLI failed: ${summarize(stderr)}`);
       // claude 非零退出时错误常在 stdout 的 JSON(如 usage limit),提取出来别让报错只剩命令回显
       const stdoutTail = extractErrorFromStdout(String(errObj.stdout ?? ""));
-      if (stdoutTail) throw new Error(`claude CLI failed: ${stdoutTail}`);
-      throw error;
+      throw new Error(`claude CLI failed: ${summarize(stdoutTail || "nonzero exit")}`);
     }
   }
 }
@@ -113,11 +112,15 @@ function extractErrorFromStdout(stdout: string) {
   try {
     const parsed = JSON.parse(trimmed) as Record<string, unknown>;
     const result = typeof parsed.result === "string" ? parsed.result : "";
-    if (parsed.is_error || result) return result.slice(0, 300) || JSON.stringify(parsed).slice(0, 300);
+    if (parsed.is_error || result) return result.slice(0, 200) || JSON.stringify(parsed).slice(0, 200);
   } catch {
-    return trimmed.slice(-300);
+    return trimmed.slice(-200);
   }
   return "";
+}
+
+function summarize(value: string) {
+  return value.replace(/\s+/g, " ").trim().slice(0, 200);
 }
 
 function isTimeout(error: unknown) {

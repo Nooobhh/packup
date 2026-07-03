@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { LLMRunner } from "@/lib/llm/types";
 import { buildExtractPrompt } from "@/lib/prompts/extract";
+import { BUDGETS } from "./budgets";
 import type { CandidatePoi, FilteredItem, Note, TripInput } from "./types";
 import { CandidatePoiSchema, FilteredItemSchema } from "./types";
 
@@ -11,7 +12,13 @@ export async function runExtract(
   opts: { workDir?: string } = {}
 ): Promise<{ pois: CandidatePoi[]; filtered: FilteredItem[]; failedNotes: { noteId: string; reason: string }[] }> {
   const okNotes = notes.filter((note) => note.fetchStatus === "ok");
-  const results = await mapLimit(okNotes, 3, (note) => extractOne(resolveNoteImages(note, opts.workDir), input, llm));
+  const results = await mapLimitWithDeadline(
+    okNotes,
+    3,
+    (note) => extractOne(resolveNoteImages(note, opts.workDir), input, llm),
+    BUDGETS.extractStageMs,
+    (note) => ({ pois: [], filtered: [], failed: { noteId: note.id, reason: "提取超时" } })
+  );
   return {
     pois: results.flatMap((result) => result.pois),
     filtered: results.flatMap((result) => result.filtered),
@@ -36,10 +43,10 @@ async function extractOne(note: Note, input: TripInput, llm: LLMRunner) {
         prompt: buildExtractPrompt(note, input, validationError),
         images: note.images,
         jsonSchema: extractJsonSchema,
-        timeoutMs: 300_000
+        timeoutMs: BUDGETS.extractPerNoteMs
       });
     } catch (error) {
-      return { pois: [], filtered: [], failed: { noteId: note.id, reason: error instanceof Error ? error.message : String(error) } };
+      return { pois: [], filtered: [], failed: { noteId: note.id, reason: summarizeReason(error instanceof Error ? error.message : String(error)) } };
     }
 
     try {
@@ -47,7 +54,7 @@ async function extractOne(note: Note, input: TripInput, llm: LLMRunner) {
     } catch (error) {
       validationError = error instanceof Error ? error.message : String(error);
       if (attempt === 1) {
-        return { pois: [], filtered: [], failed: { noteId: note.id, reason: validationError } };
+        return { pois: [], filtered: [], failed: { noteId: note.id, reason: summarizeReason(validationError) } };
       }
     }
   }
@@ -64,17 +71,35 @@ function normalizeExtractPayload(payload: unknown, noteId: string) {
   return { pois, filtered, failed: undefined as undefined | { noteId: string; reason: string } };
 }
 
-async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+async function mapLimitWithDeadline<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>, stageMs: number, onTimeout: (item: T) => R): Promise<R[]> {
   const results = new Array<R>(items.length);
   let cursor = 0;
+  const deadline = Date.now() + stageMs;
+  const timedOut = Symbol("timedOut");
   async function worker() {
     while (cursor < items.length) {
       const index = cursor++;
-      results[index] = await fn(items[index]);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        results[index] = onTimeout(items[index]);
+        continue;
+      }
+      const task = fn(items[index]);
+      task.catch(() => undefined);
+      const result = await Promise.race([task, sleep(remaining).then(() => timedOut)]);
+      results[index] = result === timedOut ? onTimeout(items[index]) : (result as R);
     }
   }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   return results;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function summarizeReason(reason: string) {
+  return reason.replace(/\s+/g, " ").trim().slice(0, 200);
 }
 
 const extractJsonSchema = {

@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { BUDGETS } from "@/lib/pipeline/budgets";
 import { NoteSchema, type Note } from "@/lib/pipeline/types";
 import type { ContentFetcher } from "./types";
 
@@ -41,11 +42,16 @@ export class XhsHttpFetcher implements ContentFetcher {
 
   async fetch(links: string[], workDir: string): Promise<Note[]> {
     const notes: Note[] = [];
+    const deadline = Date.now() + BUDGETS.fetchTotalMs;
     for (let index = 0; index < links.length; index++) {
+      if (Date.now() >= deadline) {
+        notes.push(failedNote(links[index], new Error("抓取超时")));
+        continue;
+      }
       if (index > 0) await this.sleep(this.delayMs);
       const url = links[index];
       try {
-        const parsed = await this.fetchNoteWithRetry(url);
+        const parsed = await withDeadline(this.fetchNoteWithRetry(url), deadline);
         const images: string[] = [];
         await mkdir(path.join(workDir, "images", parsed.id), { recursive: true });
         for (let imageIndex = 0; imageIndex < parsed.imageUrls.length; imageIndex++) {
@@ -237,6 +243,20 @@ function failedNote(url: string, error: unknown): Note {
     body: "",
     images: [],
     fetchStatus: "failed",
-    failReason: error instanceof Error ? error.message : String(error)
+    failReason: summarizeReason(error instanceof Error ? error.message : String(error))
   });
+}
+
+async function withDeadline<T>(promise: Promise<T>, deadline: number): Promise<T> {
+  promise.catch(() => undefined);
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error("抓取超时");
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error("抓取超时")), remaining))
+  ]);
+}
+
+function summarizeReason(reason: string) {
+  return reason.replace(/\s+/g, " ").trim().slice(0, 200);
 }

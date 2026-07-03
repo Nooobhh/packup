@@ -74,6 +74,22 @@ describe("ClaudeCliRunner", () => {
     await expect(runner.run({ prompt: "x", timeoutMs: 1 })).rejects.toThrow("bad schema");
   });
 
+  it("summarizes command failures without leaking prompt arguments", async () => {
+    const promptMarker = "SECRET_PROMPT_BODY_SHOULD_NOT_LEAK";
+    const longPromptEcho = `Command failed: claude -p ${promptMarker} ${"x".repeat(500)}`;
+    const runner = new ClaudeCliRunner({
+      execClaude: vi.fn().mockRejectedValue(Object.assign(new Error(longPromptEcho), { stderr: "", stdout: "" }))
+    });
+
+    await expect(runner.run({ prompt: promptMarker, timeoutMs: 1 })).rejects.toMatchObject({
+      message: expect.not.stringContaining(promptMarker)
+    });
+    await runner.run({ prompt: promptMarker, timeoutMs: 1 }).catch((error) => {
+      expect(error.message.length).toBeLessThanOrEqual(250);
+      expect(error.message).toContain("claude CLI failed");
+    });
+  });
+
   it("returns text from common claude JSON wrapper shapes", async () => {
     await expect(
       new ClaudeCliRunner({ execClaude: vi.fn().mockResolvedValue({ stdout: JSON.stringify({ content: [{ text: "hello" }] }) }) }).run({
