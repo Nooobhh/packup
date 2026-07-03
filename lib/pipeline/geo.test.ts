@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { backtrackRatio, distanceMatrix, haversineKm, nearestNeighborEdges, nearestNeighborPathKm } from "./geo";
+import { backtrackRatio, clusterByDistance, distanceMatrix, haversineKm, nearestNeighborEdges, nearestNeighborPathKm } from "./geo";
 
 describe("geo utilities", () => {
   it("computes haversine distance within 1% for New York to London", () => {
@@ -52,5 +52,43 @@ describe("geo utilities", () => {
     expect(nearestNeighborPathKm([])).toBe(0);
     expect(backtrackRatio([])).toBe(1);
     expect(backtrackRatio([{ lng: 0, lat: 0 }, { lng: 1, lat: 1 }])).toBe(1);
+  });
+
+  it("clusters transitively connected nearby POIs under the default threshold", () => {
+    const clusters = clusterByDistance([
+      { id: "a", location: { lng: 0, lat: 0 } },
+      { id: "b", location: { lng: 0, lat: 0.00135 } },
+      { id: "c", location: { lng: 0, lat: 0.00315 } }
+    ]);
+
+    expect(clusters.get("a")).toBe("a");
+    expect(clusters.get("b")).toBe("a");
+    expect(clusters.get("c")).toBe("a");
+  });
+
+  it("keeps POIs farther than the threshold in separate clusters", () => {
+    const clusters = clusterByDistance([
+      { id: "a", location: { lng: 0, lat: 0 } },
+      { id: "b", location: { lng: 0, lat: 0.003 } }
+    ]);
+
+    expect(clusters.get("a")).toBe("a");
+    expect(clusters.get("b")).toBe("b");
+  });
+
+  it("keeps POIs without locations independent", () => {
+    const clusters = clusterByDistance([
+      { id: "a", location: { lng: 0, lat: 0 } },
+      { id: "missing" },
+      { id: "b", location: { lng: 0, lat: 0.001 } }
+    ]);
+
+    expect(clusters.get("a")).toBe("a");
+    expect(clusters.get("b")).toBe("a");
+    expect(clusters.get("missing")).toBe("missing");
+  });
+
+  it("returns an empty map for empty input", () => {
+    expect(clusterByDistance([]).size).toBe(0);
   });
 });

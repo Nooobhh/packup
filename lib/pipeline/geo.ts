@@ -62,6 +62,54 @@ export function nearestNeighborPathKm(points: LngLat[]): number {
   return total;
 }
 
+export function clusterByDistance<T extends { id: string; location?: LngLat }>(pois: T[], thresholdKm = 0.25): Map<string, string> {
+  const parent = new Map<string, string>();
+  const inputIndex = new Map<string, number>();
+  for (const [index, poi] of pois.entries()) {
+    parent.set(poi.id, poi.id);
+    inputIndex.set(poi.id, index);
+  }
+
+  const located = pois.filter((poi): poi is T & { location: LngLat } => Boolean(poi.location));
+  for (let i = 0; i < located.length; i++) {
+    for (let j = i + 1; j < located.length; j++) {
+      if (haversineKm(located[i].location, located[j].location) <= thresholdKm) {
+        union(located[i].id, located[j].id);
+      }
+    }
+  }
+
+  const groups = new Map<string, string[]>();
+  for (const poi of pois) {
+    const root = find(poi.id);
+    groups.set(root, [...(groups.get(root) ?? []), poi.id]);
+  }
+
+  const clusterKeys = new Map<string, string>();
+  for (const ids of groups.values()) {
+    const clusterKey = ids.reduce((first, id) => (inputIndex.get(id)! < inputIndex.get(first)! ? id : first), ids[0]);
+    for (const id of ids) clusterKeys.set(id, clusterKey);
+  }
+  return clusterKeys;
+
+  function find(id: string): string {
+    const current = parent.get(id) ?? id;
+    if (current === id) return id;
+    const root = find(current);
+    parent.set(id, root);
+    return root;
+  }
+
+  function union(a: string, b: string) {
+    const rootA = find(a);
+    const rootB = find(b);
+    if (rootA === rootB) return;
+    const keep = inputIndex.get(rootA)! <= inputIndex.get(rootB)! ? rootA : rootB;
+    const move = keep === rootA ? rootB : rootA;
+    parent.set(move, keep);
+  }
+}
+
 export function backtrackRatio(orderedPoints: LngLat[]): number {
   if (orderedPoints.length < 3) return 1;
   const orderedDistance = pathDistance(orderedPoints);
