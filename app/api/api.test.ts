@@ -4,6 +4,9 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "./generate/route";
 import { GET } from "./trips/[id]/route";
+import { GET as GET_CANDIDATES } from "./trips/[id]/candidates/route";
+import { PATCH as PATCH_PLAN } from "./trips/[id]/plan/route";
+import { POST as POST_SELECTION } from "./trips/[id]/selection/route";
 import type { StageEvent } from "@/lib/pipeline/types";
 
 let dataRoot: string;
@@ -17,6 +20,7 @@ beforeEach(async () => {
 afterEach(async () => {
   process.env.PACKUP_DATA_DIR = oldEnv;
   (globalThis as typeof globalThis & { __packupGeneratePipelineForTest?: unknown }).__packupGeneratePipelineForTest = undefined;
+  (globalThis as typeof globalThis & { __packupPatchMapForTest?: unknown }).__packupPatchMapForTest = undefined;
   await rm(dataRoot, { recursive: true, force: true });
 });
 
@@ -27,7 +31,7 @@ describe("POST /api/generate", () => {
     expect(await res.json()).toHaveProperty("error");
   });
 
-  it("streams stage events and a final done event with tripId", async () => {
+  it("streams stage events and a final await-selection event with tripId", async () => {
     (globalThis as typeof globalThis & { __packupGeneratePipelineForTest?: unknown }).__packupGeneratePipelineForTest = async (_input: unknown, _deps: unknown, opts: { onEvent?: (event: StageEvent) => void }) => {
       opts.onEvent?.({ stage: "fetch", status: "start", at: "2026-07-02T00:00:00.000Z" });
       return { tripId: "trip-api" };
@@ -42,8 +46,98 @@ describe("POST /api/generate", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/event-stream");
     expect(text).toContain('"stage":"fetch"');
-    expect(text).toContain('"stage":"done"');
+    expect(text).toContain('"status":"await-selection"');
     expect(text).toContain('"tripId":"trip-api"');
+  });
+
+  it("parses query input and stops at await-selection", async () => {
+    const calls: unknown[] = [];
+    (globalThis as typeof globalThis & { __packupGeneratePipelineForTest?: unknown }).__packupGeneratePipelineForTest = async (input: unknown, _deps: unknown, opts: { toStage?: string; onEvent?: (event: StageEvent) => void }) => {
+      calls.push({ input, toStage: opts.toStage });
+      opts.onEvent?.({ stage: "ground", status: "done", at: "2026-07-03T00:00:00.000Z" });
+      return { tripId: "trip-query" };
+    };
+    const res = await POST(new Request("http://test/api/generate", { method: "POST", body: JSON.stringify({ query: "杭州3天旅游攻略", links: ["u"] }) }));
+    const text = await res.text();
+
+    expect(calls[0]).toMatchObject({ input: { destination: "杭州", days: { base: 3 }, query: "杭州3天旅游攻略" }, toStage: "ground" });
+    expect(text.trim().endsWith('data: {"stage":"ground","status":"await-selection","tripId":"trip-query"}')).toBe(true);
+  });
+
+  it("returns 400 when query cannot be parsed", async () => {
+    const res = await POST(new Request("http://test/api/generate", { method: "POST", body: JSON.stringify({ query: "帮我规划一个超级好玩的假期行程", links: ["u"] }) }));
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("无法识别目的地");
+  });
+});
+
+describe("GET /api/trips/[id]/candidates", () => {
+  it("returns grounded candidates and filtered items or readiness errors", async () => {
+    await writeTrip("trip-candidates", {
+      input: { id: "trip-candidates", links: ["u"], destination: "上海", transport: "public", pace: "moderate" },
+      notes: [],
+      pois: { pois: [], filtered: [{ name: "广告", stage: "extract", reason: "广告" }] },
+      grounded: { grounded: [{ id: "p1", name: "外滩", type: "sight", reason: "好看", sourceNoteId: "n1", sourceType: "text", verified: true }], filtered: [] },
+      plan: { days: [{ index: 1, items: [] }], filtered: [], warnings: [] }
+    });
+
+    const ok = await GET_CANDIDATES(new Request("http://test"), { params: Promise.resolve({ id: "trip-candidates" }) });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toMatchObject({ grounded: [expect.objectContaining({ id: "p1" })], filtered: [expect.objectContaining({ name: "广告" })] });
+    expect((await GET_CANDIDATES(new Request("http://test"), { params: Promise.resolve({ id: "missing" }) })).status).toBe(404);
+
+    const dir = path.join(dataRoot, "trip-not-ready");
+    await mkdir(dir, { recursive: true });
+    expect((await GET_CANDIDATES(new Request("http://test"), { params: Promise.resolve({ id: "trip-not-ready" }) })).status).toBe(409);
+  });
+});
+
+describe("POST /api/trips/[id]/selection", () => {
+  it("writes selection and resumes plan, rejecting empty selections", async () => {
+    await mkdir(path.join(dataRoot, "trip-select"), { recursive: true });
+    const calls: unknown[] = [];
+    (globalThis as typeof globalThis & { __packupGeneratePipelineForTest?: unknown }).__packupGeneratePipelineForTest = async (_input: unknown, _deps: unknown, opts: unknown) => {
+      calls.push(opts);
+      return { tripId: "trip-select" };
+    };
+
+    const bad = await POST_SELECTION(new Request("http://test", { method: "POST", body: JSON.stringify({ selectedPoiIds: [], selectedAt: "x" }) }), { params: Promise.resolve({ id: "trip-select" }) });
+    expect(bad.status).toBe(400);
+
+    const ok = await POST_SELECTION(new Request("http://test", { method: "POST", body: JSON.stringify({ selectedPoiIds: ["p1"], selectedAt: "2026-07-03T00:00:00.000Z" }) }), { params: Promise.resolve({ id: "trip-select" }) });
+    expect(ok.status).toBe(200);
+    expect(await readFile(path.join(dataRoot, "trip-select", "25-selection.json"), "utf8")).toContain("p1");
+    expect(calls[0]).toMatchObject({ fromStage: "plan", force: false });
+  });
+});
+
+describe("PATCH /api/trips/[id]/plan", () => {
+  it("reorders with pair-diff route recomputation and preserves unchanged order", async () => {
+    await writePatchTrip("trip-patch");
+    const route = vi.fn().mockResolvedValue({ durationMin: 10, distanceKm: 1 });
+    (globalThis as typeof globalThis & { __packupPatchMapForTest?: unknown }).__packupPatchMapForTest = { route };
+
+    const unchanged = await PATCH_PLAN(new Request("http://test", { method: "PATCH", body: JSON.stringify({ op: "reorder", day: 1, orderedIds: ["p1", "p2", "p3", "p4"] }) }), { params: Promise.resolve({ id: "trip-patch" }) });
+    expect(unchanged.status).toBe(200);
+    expect(route).toHaveBeenCalledTimes(0);
+
+    const swapped = await PATCH_PLAN(new Request("http://test", { method: "PATCH", body: JSON.stringify({ op: "reorder", day: 1, orderedIds: ["p1", "p3", "p2", "p4"] }) }), { params: Promise.resolve({ id: "trip-patch" }) });
+    expect(swapped.status).toBe(200);
+    expect(route).toHaveBeenCalledTimes(3);
+  });
+
+  it("recomputes one segment for set-transport and rejects incomplete reorder without rewriting", async () => {
+    await writePatchTrip("trip-patch-2");
+    const route = vi.fn().mockResolvedValue({ durationMin: 10, distanceKm: 1 });
+    (globalThis as typeof globalThis & { __packupPatchMapForTest?: unknown }).__packupPatchMapForTest = { route };
+
+    const bad = await PATCH_PLAN(new Request("http://test", { method: "PATCH", body: JSON.stringify({ op: "reorder", day: 1, orderedIds: ["p1", "p2"] }) }), { params: Promise.resolve({ id: "trip-patch-2" }) });
+    expect(bad.status).toBe(400);
+    expect(JSON.parse(await readFile(path.join(dataRoot, "trip-patch-2", "40-plan.json"), "utf8")).days[0].items).toHaveLength(4);
+
+    const ok = await PATCH_PLAN(new Request("http://test", { method: "PATCH", body: JSON.stringify({ op: "set-transport", day: 1, segmentIndex: 1, mode: "drive" }) }), { params: Promise.resolve({ id: "trip-patch-2" }) });
+    expect(ok.status).toBe(200);
+    expect(route).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -86,6 +180,7 @@ async function writeTrip(
     input: unknown;
     notes: unknown;
     pois: unknown;
+    grounded?: unknown;
     plan: unknown;
   }
 ) {
@@ -94,6 +189,25 @@ async function writeTrip(
   await writeFile(path.join(dir, "00-input.json"), JSON.stringify(files.input), "utf8");
   await writeFile(path.join(dir, "10-notes.json"), JSON.stringify(files.notes), "utf8");
   await writeFile(path.join(dir, "20-pois.json"), JSON.stringify(files.pois), "utf8");
+  if (files.grounded) await writeFile(path.join(dir, "30-grounded.json"), JSON.stringify(files.grounded), "utf8");
   await writeFile(path.join(dir, "40-plan.json"), JSON.stringify(files.plan), "utf8");
   await readFile(path.join(dir, "40-plan.json"), "utf8");
+}
+
+async function writePatchTrip(id: string) {
+  const dir = path.join(dataRoot, id);
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, "40-plan.json"), JSON.stringify({
+    days: [{ index: 1, items: ["p1", "p2", "p3", "p4"].map((id, index) => ({
+      id,
+      poiId: id,
+      name: id,
+      slot: "morning",
+      durationMin: 60,
+      location: { lng: 121 + index * 0.02, lat: 31 },
+      transportToNext: index < 3 ? { mode: "public", durationMin: 10, distanceKm: 1 } : undefined
+    })) }],
+    filtered: [],
+    warnings: []
+  }), "utf8");
 }
