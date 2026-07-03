@@ -3,8 +3,8 @@ import type { LLMRunner } from "@/lib/llm/types";
 import type { MapProvider } from "@/lib/map/types";
 import { buildPlanPrompt } from "@/lib/prompts/plan";
 import { backtrackRatio } from "./geo";
-import { runPlan } from "./plan";
-import type { GroundedPoi, TripInput } from "./types";
+import { nearestClusterOrder, planItemFromPoi, recommendLegTransport, runPlan } from "./plan";
+import type { GroundedPoi, PlanItem, TripInput } from "./types";
 
 const input: TripInput = {
   links: ["https://xhslink.com/1"],
@@ -242,6 +242,66 @@ describe("buildPlanPrompt", () => {
   });
 });
 
+describe("recommendLegTransport", () => {
+  it("uses transport preferences to choose short and long leg modes", async () => {
+    const route = vi.fn(async (_from, _to, mode) => ({ durationMin: mode === "bike" ? 10 : 20, distanceKm: mode === "bike" ? 1.5 : 3 }));
+
+    const short = await recommendLegTransport(
+      item("near-a", 121, 31),
+      item("near-b", 121.0159, 31),
+      { transport: "public" },
+      { route },
+      Number.POSITIVE_INFINITY,
+      { shortKm: 2, shortMode: "bike", longMode: "drive" }
+    );
+    const long = await recommendLegTransport(
+      item("far-a", 121, 31),
+      item("far-b", 121.0318, 31),
+      { transport: "public" },
+      { route },
+      Number.POSITIVE_INFINITY,
+      { shortKm: 2, shortMode: "bike", longMode: "drive" }
+    );
+
+    expect(short?.mode).toBe("bike");
+    expect(long?.mode).toBe("drive");
+  });
+
+  it("keeps legacy distance behavior when no preferences are passed", async () => {
+    const route = vi.fn(async (_from, _to, mode) => ({ durationMin: 8, distanceKm: 0.5, mode }));
+
+    const result = await recommendLegTransport(item("a", 121, 31), item("b", 121.0045, 31), { transport: "drive" }, { route });
+
+    expect(result?.mode).toBe("walk");
+    expect(route).toHaveBeenCalledWith(expect.anything(), expect.anything(), "walk");
+  });
+
+  it("keeps same-cluster walk shortcut even when preferences prefer bike", async () => {
+    const route = vi.fn(async () => ({ durationMin: 8, distanceKm: 0.5 }));
+
+    const result = await recommendLegTransport(
+      { ...item("a", 121, 31), clusterKey: "cluster-1" },
+      { ...item("b", 121.0045, 31), clusterKey: "cluster-1" },
+      { transport: "drive" },
+      { route },
+      Number.POSITIVE_INFINITY,
+      { shortKm: 2, shortMode: "bike", longMode: "drive" }
+    );
+
+    expect(result?.mode).toBe("walk");
+    expect(route).not.toHaveBeenCalled();
+  });
+
+  it("exports plan item and nearest cluster helpers", () => {
+    const poi = gp("p1", "外滩", 121, 31);
+    const planItem = planItemFromPoi(poi, "morning", "cluster-1");
+    const ordered = nearestClusterOrder([item("a", 121, 31), item("b", 121.01, 31)]);
+
+    expect(planItem).toMatchObject({ name: "外滩", slot: "morning", clusterKey: "cluster-1" });
+    expect(ordered).toHaveLength(2);
+  });
+});
+
 function gp(id: string, name: string, lng: number, lat: number, verified = true, type: GroundedPoi["type"] = "sight"): GroundedPoi {
   return {
     id,
@@ -262,5 +322,9 @@ function llmWith(result: unknown): LLMRunner {
 }
 
 function mapWithRoute(route: MapProvider["route"]): MapProvider {
-  return { searchPoi: vi.fn(), route: vi.fn(route) };
+  return { searchPoi: vi.fn(), searchPois: vi.fn(), route: vi.fn(route) };
+}
+
+function item(id: string, lng: number, lat: number): PlanItem {
+  return { id, name: id, durationMin: 60, location: { lng, lat }, clusterKey: id };
 }

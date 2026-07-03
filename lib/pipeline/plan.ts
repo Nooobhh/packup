@@ -3,7 +3,7 @@ import type { MapProvider } from "@/lib/map/types";
 import { buildPlanPrompt, type PlanPromptPoi, type PlanViolationDetail } from "@/lib/prompts/plan";
 import { BUDGETS } from "./budgets";
 import { backtrackRatio, clusterByDistance, haversineKm } from "./geo";
-import type { FilteredItem, GroundedPoi, LngLat, PlanDay, PlanItem, Slot, TripInput, TripPlan } from "./types";
+import type { FilteredItem, GroundedPoi, LngLat, PlanDay, PlanItem, Slot, TransportPrefs, TripInput, TripPlan } from "./types";
 import { FilteredItemSchema, TripPlanSchema } from "./types";
 
 const SLOT_ORDER: Slot[] = ["morning", "afternoon", "evening"];
@@ -163,7 +163,7 @@ function rehydratePlannerOutput(
     }
     return { index: dayIndex + 1, theme: day.theme, items };
   });
-  return { days, filtered: [], warnings: Array.from(warnings), daysDecision: planner.daysDecision };
+  return { days, pool: [], filtered: [], warnings: Array.from(warnings), daysDecision: planner.daysDecision };
 }
 
 function fallbackFromGrounded(
@@ -188,10 +188,10 @@ function fallbackFromGrounded(
     const key = poiKey(first);
     days[0].items.push(planItemFromPoi(first, "morning", clusters.get(key) ?? key));
   }
-  return { days, filtered: [], warnings: [] };
+  return { days, pool: [], filtered: [], warnings: [] };
 }
 
-function planItemFromPoi(poi: GroundedPoi, slot: Slot, clusterKey: string): PlanItem {
+export function planItemFromPoi(poi: GroundedPoi, slot: Slot, clusterKey: string): PlanItem {
   return {
     id: poi.id ?? poi.amapId ?? poi.name,
     poiId: poi.id ?? poi.amapId ?? poi.name,
@@ -243,7 +243,8 @@ export async function recommendLegTransport(
   toItem: PlanItem,
   input: Pick<TripInput, "transport">,
   map: Pick<MapProvider, "route">,
-  deadline = Number.POSITIVE_INFINITY
+  deadline = Number.POSITIVE_INFINITY,
+  prefs?: TransportPrefs
 ) {
   const from = itemLocation(fromItem);
   const to = itemLocation(toItem);
@@ -253,7 +254,7 @@ export async function recommendLegTransport(
     return { mode: "walk" as const, durationMin: Math.min(5, Math.max(1, Math.round((directKm / 5) * 60))), distanceKm: directKm };
   }
   if (Date.now() >= deadline) return estimateWalk(directKm);
-  const preferred = directKm < 0.8 ? "walk" : input.transport ?? "public";
+  const preferred = prefs ? (directKm < prefs.shortKm ? prefs.shortMode : prefs.longMode) : directKm < 0.8 ? "walk" : input.transport ?? "public";
   let route = await map.route(from, to, preferred);
   let mode = preferred;
   if (preferred === "public" && route.durationMin > 90 && Date.now() < deadline) {
@@ -344,7 +345,7 @@ function nearestItemOrder(items: PlanItem[], start?: PlanItem) {
   return ordered;
 }
 
-function nearestClusterOrder(items: PlanItem[], start?: PlanItem) {
+export function nearestClusterOrder(items: PlanItem[], start?: PlanItem) {
   const groups = clusterItemGroups(items);
   if (groups.length < 2) return groups;
   const ordered: Array<{ key: string; items: PlanItem[] }> = [];
