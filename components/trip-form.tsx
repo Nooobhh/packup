@@ -10,11 +10,14 @@ export function TripForm() {
   const [linksText, setLinksText] = useState("");
   const [events, setEvents] = useState<StageEvent[]>([]);
   const [error, setError] = useState("");
+  const [tripId, setTripId] = useState("");
   const links = useMemo(() => normalizeLinks(linksText), [linksText]);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setError("");
+    setTripId("");
+    setEvents([]);
     if (!query.trim()) {
       setError("请填写旅行需求");
       return;
@@ -42,12 +45,13 @@ export function TripForm() {
         const line = chunk.split("\n").find((item) => item.startsWith("data: "));
         if (!line) continue;
         const payload = JSON.parse(line.slice(6));
+        if (typeof payload.tripId === "string") setTripId(payload.tripId);
         if (payload.status === "await-selection") {
           window.location.href = `/trip/${payload.tripId}/select`;
           return;
         }
         if (payload.status === "error") setError("已完成段保留,可重跑");
-        setEvents((old) => [...old, payload]);
+        if (isStageEvent(payload)) setEvents((old) => [...old, payload]);
       }
     }
   }
@@ -70,9 +74,18 @@ export function TripForm() {
           <p className="text-sm text-muted-foreground">识别到 {links.length} 条小红书链接</p>
         </div>
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
+        {tripId ? (
+          <p className="text-sm text-muted-foreground">
+            行程 ID: {tripId}, 中断后可访问 <a className="underline" href={`/trip/${tripId}/select`}>/trip/{tripId}/select</a> 继续
+          </p>
+        ) : null}
         <button type="submit" className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">生成行程</button>
       </form>
       <ProgressStream events={events} />
     </main>
   );
+}
+
+function isStageEvent(value: unknown): value is StageEvent {
+  return typeof value === "object" && value !== null && "stage" in value && "status" in value;
 }

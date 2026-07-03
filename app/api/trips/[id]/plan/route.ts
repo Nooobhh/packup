@@ -25,7 +25,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   const patch = PatchSchema.safeParse(body);
   if (!patch.success) return Response.json({ error: "Invalid patch", issues: patch.error.issues }, { status: 400 });
 
-  const plan = TripPlanSchema.parse(await readJson(file));
+  const originalRaw = await readFile(file, "utf8");
+  const plan = TripPlanSchema.parse(JSON.parse(originalRaw));
+  await (globalThis as typeof globalThis & { __packupPatchAfterReadForTest?: (file: string) => Promise<void> | void }).__packupPatchAfterReadForTest?.(file);
   const day = plan.days[patch.data.day - 1];
   if (!day) return Response.json({ error: "day 越界" }, { status: 400 });
   const map = getMap();
@@ -42,6 +44,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   }
 
   const parsed = TripPlanSchema.parse(plan);
+  if (!(await isUnchanged(file, originalRaw))) {
+    return Response.json({ error: "行程已被更新,请刷新后重试" }, { status: 409 });
+  }
   await writeFile(file, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
   return Response.json(parsed);
 }
@@ -122,6 +127,10 @@ async function exists(file: string) {
   }
 }
 
-async function readJson(file: string) {
-  return JSON.parse(await readFile(file, "utf8")) as unknown;
+async function isUnchanged(file: string, originalRaw: string) {
+  try {
+    return (await readFile(file, "utf8")) === originalRaw;
+  } catch {
+    return false;
+  }
 }

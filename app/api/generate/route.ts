@@ -43,6 +43,7 @@ export async function POST(request: Request) {
     async start(controller) {
       const send = (event: unknown) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
       try {
+        send({ type: "init", tripId: input.id });
         const pipelineOverride = (globalThis as typeof globalThis & { __packupGeneratePipelineForTest?: PipelineFn }).__packupGeneratePipelineForTest;
         const pipeline = pipelineOverride ?? runPipeline;
         const deps = pipelineOverride ? testDeps() : createDefaultPipelineDeps(undefined, input);

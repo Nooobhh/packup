@@ -21,6 +21,7 @@ afterEach(async () => {
   process.env.PACKUP_DATA_DIR = oldEnv;
   (globalThis as typeof globalThis & { __packupGeneratePipelineForTest?: unknown }).__packupGeneratePipelineForTest = undefined;
   (globalThis as typeof globalThis & { __packupPatchMapForTest?: unknown }).__packupPatchMapForTest = undefined;
+  (globalThis as typeof globalThis & { __packupPatchAfterReadForTest?: unknown }).__packupPatchAfterReadForTest = undefined;
   await rm(dataRoot, { recursive: true, force: true });
 });
 
@@ -39,12 +40,13 @@ describe("POST /api/generate", () => {
     const res = await POST(
       new Request("http://test/api/generate", {
         method: "POST",
-        body: JSON.stringify({ links: ["https://xhslink.com/1"], destination: "上海" })
+        body: JSON.stringify({ id: "trip-api", links: ["https://xhslink.com/1"], destination: "上海" })
       })
     );
     const text = await res.text();
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/event-stream");
+    expect(text.trim().split("\n\n")[0]).toContain('"tripId":"trip-api"');
     expect(text).toContain('"stage":"fetch"');
     expect(text).toContain('"status":"await-selection"');
     expect(text).toContain('"tripId":"trip-api"');
@@ -164,6 +166,26 @@ describe("PATCH /api/trips/[id]/plan", () => {
 
     expect(res.status).toBe(400);
     expect(saved.days[0].items.map((item: { id: string }) => item.id)).toEqual(["a", "x", "b", "y"]);
+  });
+
+  it("returns 409 without overwriting when the plan changes during patch", async () => {
+    await writePatchTrip("trip-patch-conflict");
+    (globalThis as typeof globalThis & { __packupPatchMapForTest?: unknown }).__packupPatchMapForTest = { route: vi.fn().mockResolvedValue({ durationMin: 10, distanceKm: 1 }) };
+    const thirdPartyPlan = {
+      days: [{ index: 1, items: [{ id: "fresh", poiId: "fresh", name: "fresh", durationMin: 30 }] }],
+      filtered: [],
+      warnings: ["fresh plan"]
+    };
+    (globalThis as typeof globalThis & { __packupPatchAfterReadForTest?: unknown }).__packupPatchAfterReadForTest = async (file: string) => {
+      await writeFile(file, JSON.stringify(thirdPartyPlan), "utf8");
+    };
+
+    const res = await PATCH_PLAN(new Request("http://test", { method: "PATCH", body: JSON.stringify({ op: "reorder", day: 1, orderedIds: ["p1", "p2", "p3", "p4"] }) }), { params: Promise.resolve({ id: "trip-patch-conflict" }) });
+    const saved = JSON.parse(await readFile(path.join(dataRoot, "trip-patch-conflict", "40-plan.json"), "utf8"));
+
+    expect(res.status).toBe(409);
+    expect(await res.text()).toContain("行程已被更新,请刷新后重试");
+    expect(saved).toEqual(thirdPartyPlan);
   });
 });
 

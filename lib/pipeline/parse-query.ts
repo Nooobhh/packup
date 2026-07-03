@@ -52,7 +52,7 @@ function parseByRules(query: string): { destination: string; days?: number; pref
     .trim();
 
   cleaned = trimDelimiters(cleaned);
-  const destinationMatch = cleaned.match(/^([\p{Script=Han}]{1,10}|[A-Za-z][A-Za-z\s-]{0,20})(.*)$/u);
+  const destinationMatch = cleaned.match(/^([\p{Script=Han}]{1,10}|[A-Za-z][A-Za-z-]{0,20})(.*)$/u);
   const destination = trimDelimiters(destinationMatch?.[1] ?? "");
   const rest = trimDelimiters(destinationMatch?.[2] ?? "");
 

@@ -40,6 +40,28 @@ describe("TripForm", () => {
     });
     global.fetch = originalFetch;
   });
+
+  it("shows a resumable trip link as soon as the stream sends a tripId", async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('data: {"type":"init","tripId":"trip-ui"}\n\n'));
+          controller.close();
+        }
+      })
+    }) as typeof fetch;
+    render(<TripForm />);
+
+    fireEvent.change(screen.getByPlaceholderText("香港3天2晚 city walk+美食"), { target: { value: "香港3天 city walk" } });
+    fireEvent.change(screen.getByLabelText("小红书链接"), { target: { value: "https://xhslink.com/a" } });
+    fireEvent.click(screen.getByRole("button", { name: "生成行程" }));
+
+    const link = await screen.findByRole("link", { name: /trip-ui/ });
+    expect(link).toHaveAttribute("href", "/trip/trip-ui/select");
+    global.fetch = originalFetch;
+  });
 });
 
 describe("CandidateList", () => {

@@ -20,6 +20,17 @@ describe("parseQuery", () => {
     expect(llm.run).not.toHaveBeenCalled();
   });
 
+  it("does not swallow English preferences into the destination", async () => {
+    const llm = mockLlm();
+
+    await expect(parseQuery("Osaka food", llm)).resolves.toEqual({
+      destination: "Osaka",
+      days: undefined,
+      preferences: ["food"]
+    });
+    expect(llm.run).not.toHaveBeenCalled();
+  });
+
   it("uses the llm fallback exactly once when rules cannot identify a destination", async () => {
     const llm = mockLlm(JSON.stringify({ destination: "京都", days: 4, preferences: ["寺院", "咖啡"] }));
 
