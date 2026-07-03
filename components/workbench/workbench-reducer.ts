@@ -2,6 +2,7 @@ import type { GroundedPoi, PlanItem, TransportMode, TransportPrefs, TripPlan } f
 
 export type WorkbenchIntent =
   | { type: "place-pool-item"; poolItemId: string; day: number; index?: number }
+  | { type: "add-poi-to-pool"; poi: GroundedPoi }
   | { type: "add-poi-to-day"; poi: GroundedPoi; day: number; index?: number }
   | { type: "reorder-day"; day: number; orderedGroupIds: string[] }
   | { type: "move-day-item"; fromDay: number; toDay: number; itemId: string; toIndex?: number }
@@ -12,7 +13,8 @@ export type WorkbenchIntent =
   | { type: "set-day-theme"; day: number; theme: string }
   | { type: "set-transport"; day: number; segmentIndex: number; mode: TransportMode }
   | { type: "set-transport-prefs"; prefs: TransportPrefs }
-  | { type: "optimize-day"; day: number };
+  | { type: "optimize-day"; day: number }
+  | { type: "recalc-transport"; day?: number };
 
 export function applyIntent(plan: TripPlan, intent: WorkbenchIntent): { optimisticPlan: TripPlan; patchBody: object } | { error: string } {
   const optimisticPlan = clonePlan(plan);
@@ -33,6 +35,12 @@ export function applyIntent(plan: TripPlan, intent: WorkbenchIntent): { optimist
         day.items.splice(index, 0, item);
         clearAffectedTransports(day.items, index, 1);
         return { optimisticPlan, patchBody: { op: "add-item", day: intent.day, index: intent.index, poi: intent.poi } };
+      }
+      case "add-poi-to-pool": {
+        const item = itemFromPoi(intent.poi);
+        clearForPool([item]);
+        optimisticPlan.pool.push(item);
+        return { optimisticPlan, patchBody: { op: "pool-add", poi: intent.poi } };
       }
       case "reorder-day": {
         const day = dayAt(optimisticPlan, intent.day);
@@ -103,6 +111,12 @@ export function applyIntent(plan: TripPlan, intent: WorkbenchIntent): { optimist
       case "optimize-day":
         dayAt(optimisticPlan, intent.day);
         return { optimisticPlan, patchBody: { op: "optimize-day", day: intent.day } };
+      case "recalc-transport":
+        if (intent.day !== undefined) {
+          dayAt(optimisticPlan, intent.day);
+          return { optimisticPlan, patchBody: { op: "recalc-transport", day: intent.day } };
+        }
+        return { optimisticPlan, patchBody: { op: "recalc-transport" } };
     }
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };

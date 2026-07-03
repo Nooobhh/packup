@@ -11,6 +11,7 @@ export function PoolPanel({
   dayCount,
   tripId,
   onPlace,
+  onPoiToPool,
   onPoiToDay,
   onFocusSearch
 }: {
@@ -18,6 +19,7 @@ export function PoolPanel({
   dayCount: number;
   tripId: string;
   onPlace: (poolItemId: string, day: number) => void;
+  onPoiToPool: (poi: AmapPoi) => void;
   onPoiToDay: (poi: AmapPoi, day: number) => void;
   onFocusSearch?: () => void;
 }) {
@@ -67,7 +69,7 @@ export function PoolPanel({
             <div key={poi.amapId} className="rounded-md border p-2 text-xs">
               <div className="font-medium">{poi.name}</div>
               <div className="mt-2 flex flex-wrap gap-2">
-                <button type="button" onClick={() => onPoiToDay(poi, 1)} className="rounded-md border px-2 py-1">入池</button>
+                <button type="button" onClick={() => onPoiToPool(poi)} className="rounded-md border px-2 py-1">入池</button>
                 {Array.from({ length: dayCount }, (_, index) => (
                   <button key={index} type="button" onClick={() => onPoiToDay(poi, index + 1)} className="rounded-md border px-2 py-1">
                     加入 Day {index + 1}

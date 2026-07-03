@@ -8,6 +8,7 @@ export function PoiCard({
   item,
   dragId,
   origin,
+  dragData,
   onClick,
   onEdit,
   actions
@@ -15,6 +16,7 @@ export function PoiCard({
   item: PlanItem;
   dragId: string;
   origin: "pool" | "day";
+  dragData?: Record<string, unknown>;
   onClick?: () => void;
   onEdit?: (set: { note?: string; startTime?: string; durationMin?: number }) => void;
   actions?: React.ReactNode;
@@ -25,7 +27,7 @@ export function PoiCard({
   const [durationMin, setDurationMin] = useState(String(item.durationMin));
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: dragId,
-    data: { origin, itemId: item.clusterKey ?? item.id ?? item.poiId ?? item.name }
+    data: { origin, itemId: item.clusterKey ?? item.id ?? item.poiId ?? item.name, ...dragData }
   });
   const style = transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : undefined;
 

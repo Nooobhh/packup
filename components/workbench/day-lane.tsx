@@ -32,7 +32,7 @@ export function DayLane({
   onCardClick?: (itemId: string) => void;
 }) {
   const [theme, setTheme] = useState(day.theme ?? "");
-  const { setNodeRef, isOver } = useDroppable({ id: `day:${dayNumber}`, data: { target: "day", day: dayNumber } });
+  const { setNodeRef, isOver } = useDroppable({ id: `day:${dayNumber}`, data: { target: "day", day: dayNumber, index: day.items.length } });
   const ids = day.items.map((item) => item.clusterKey ?? item.id ?? item.poiId ?? item.name ?? "");
 
   return (
@@ -55,14 +55,16 @@ export function DayLane({
       </div>
       <SortableContext items={ids} strategy={verticalListSortingStrategy}>
         <div className="mt-4 space-y-3">
+          <DayDropZone day={dayNumber} index={0} />
           {day.items.map((item, index) => {
             const id = item.clusterKey ?? item.id ?? item.poiId ?? item.name ?? "";
             return (
               <React.Fragment key={`${id}-${index}`}>
                 <PoiCard
                   item={item}
-                  dragId={`day:${dayNumber}:${id}`}
+                  dragId={`day:${dayNumber}:${id}:${index}`}
                   origin="day"
+                  dragData={{ day: dayNumber }}
                   onClick={() => onCardClick?.(id)}
                   onEdit={(set) => onEditItem(id, set)}
                   actions={
@@ -79,6 +81,7 @@ export function DayLane({
                     onRecalc={onRecalc}
                   />
                 ) : null}
+                <DayDropZone day={dayNumber} index={index + 1} />
               </React.Fragment>
             );
           })}
@@ -86,6 +89,11 @@ export function DayLane({
       </SortableContext>
     </section>
   );
+}
+
+function DayDropZone({ day, index }: { day: number; index: number }) {
+  const { setNodeRef, isOver } = useDroppable({ id: `day:${day}:drop:${index}`, data: { target: "day", day, index } });
+  return <div ref={setNodeRef} data-testid="day-drop-zone" className={`h-2 rounded ${isOver ? "bg-primary/40" : "bg-transparent"}`} />;
 }
 
 function TransportStrip({

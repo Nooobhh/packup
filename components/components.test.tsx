@@ -174,6 +174,52 @@ describe("TripWorkbench", () => {
     expect(screen.getAllByTestId("pool-card")).toHaveLength(3);
     global.fetch = originalFetch;
   });
+
+  it("sends searched POIs to pool-add when clicking 入池", async () => {
+    const originalFetch = global.fetch;
+    const plan = workbenchPlan();
+    global.fetch = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => [{ amapId: "poi-pool", name: "新地点", location: { lng: 121.4, lat: 31.2 }, address: "addr" }] })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ...plan, pool: [...plan.pool, { id: "poi-pool", name: "新地点", durationMin: 60 }] }) }) as typeof fetch;
+    render(<TripWorkbench tripId="trip-1" initialPlan={plan} initialNotes={[]} />);
+
+    fireEvent.change(screen.getByLabelText("搜索地点"), { target: { value: "新地点" } });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    fireEvent.click(await screen.findByRole("button", { name: "入池" }));
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(2));
+    expect(JSON.parse((global.fetch as ReturnType<typeof vi.fn>).mock.calls[1][1].body)).toMatchObject({ op: "pool-add", poi: { amapId: "poi-pool", name: "新地点" } });
+    global.fetch = originalFetch;
+  });
+
+  it("asks after saving transport prefs and confirms a full recalc-transport", async () => {
+    const originalFetch = global.fetch;
+    const originalConfirm = window.confirm;
+    window.confirm = vi.fn().mockReturnValue(true);
+    global.fetch = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ...workbenchPlan(), transportPrefs: { shortKm: 1, shortMode: "walk", longMode: "public" } }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => workbenchPlan() }) as typeof fetch;
+    render(<TripWorkbench tripId="trip-1" initialPlan={workbenchPlan()} initialNotes={[]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "交通偏好" }));
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(2));
+    expect(window.confirm).toHaveBeenCalledWith("立即全程重算交通?");
+    expect(JSON.parse((global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body)).toMatchObject({ op: "set-transport-prefs" });
+    expect(JSON.parse((global.fetch as ReturnType<typeof vi.fn>).mock.calls[1][1].body)).toEqual({ op: "recalc-transport" });
+    window.confirm = originalConfirm;
+    global.fetch = originalFetch;
+  });
+
+  it("renders map focus and pool visibility controls", () => {
+    render(<TripWorkbench tripId="trip-1" initialPlan={workbenchPlan()} initialNotes={[]} />);
+
+    expect(screen.getByRole("button", { name: "地图总览" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "地图 Day 1" })).toBeInTheDocument();
+    expect(screen.getByLabelText("显示池点")).toBeInTheDocument();
+  });
 });
 
 describe("WorkbenchMap and DetailDrawer", () => {

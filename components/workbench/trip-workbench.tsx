@@ -20,6 +20,8 @@ export function TripWorkbench({ initialPlan, initialNotes, tripId }: { initialPl
   const [shortKm, setShortKm] = useState(String(initialPlan.transportPrefs?.shortKm ?? 1));
   const [shortMode, setShortMode] = useState<TransportMode>(initialPlan.transportPrefs?.shortMode ?? "walk");
   const [longMode, setLongMode] = useState<TransportMode>(initialPlan.transportPrefs?.longMode ?? "public");
+  const [mapFocus, setMapFocus] = useState<"all" | number>("all");
+  const [showPoolOnMap, setShowPoolOnMap] = useState(true);
   const selectedItem = selectedItemId ? findItem(plan, selectedItemId) : undefined;
 
   async function execute(intent: WorkbenchIntent, options: { recalcAfterPrefs?: boolean } = {}) {
@@ -36,7 +38,7 @@ export function TripWorkbench({ initialPlan, initialNotes, tripId }: { initialPl
       const payload = await response.json();
       setPlan("days" in payload ? payload : payload.plan);
       if (options.recalcAfterPrefs && window.confirm("立即全程重算交通?")) {
-        await execute({ type: "optimize-day", day: 1 });
+        await execute({ type: "recalc-transport" });
       }
       return;
     }
@@ -54,24 +56,29 @@ export function TripWorkbench({ initialPlan, initialNotes, tripId }: { initialPl
   }
 
   function handleDragEnd(event: DragEndEvent) {
-    const activeId = String(event.active.id);
-    const overId = event.over ? String(event.over.id) : "";
-    if (!overId) return;
-    const active = event.active.data.current as { origin?: "pool" | "day"; itemId?: string } | undefined;
+    const over = event.over?.data.current as DropTarget | undefined;
+    if (!over) return;
+    const active = event.active.data.current as DragSource | undefined;
     const itemId = active?.itemId;
     if (!itemId) return;
-    if (active?.origin === "pool" && overId.startsWith("day:")) {
-      void execute({ type: "place-pool-item", poolItemId: itemId, day: Number(overId.split(":")[1]) });
+    if (active?.origin === "pool" && over.target === "day") {
+      void execute({ type: "place-pool-item", poolItemId: itemId, day: over.day, index: over.index });
     }
-    if (active?.origin === "day" && overId === "pool-drop") {
-      const fromDay = Number(activeId.split(":")[1]);
-      void execute({ type: "return-item-to-pool", day: fromDay, itemId });
+    if (active?.origin === "day" && over.target === "pool") {
+      void execute({ type: "return-item-to-pool", day: active.day, itemId });
     }
-    if (active?.origin === "day" && overId.startsWith("day:")) {
-      const fromDay = Number(activeId.split(":")[1]);
-      const toDay = Number(overId.split(":")[1]);
-      if (fromDay !== toDay) void execute({ type: "move-day-item", fromDay, toDay, itemId });
+    if (active?.origin === "day" && over.target === "day") {
+      if (active.day === over.day) {
+        const orderedGroupIds = reorderGroupIds(plan, active.day, itemId, over.index);
+        if (orderedGroupIds) void execute({ type: "reorder-day", day: active.day, orderedGroupIds });
+      } else {
+        void execute({ type: "move-day-item", fromDay: active.day, toDay: over.day, itemId, toIndex: over.index });
+      }
     }
+  }
+
+  function addPoiToPool(poi: AmapPoi) {
+    void execute({ type: "add-poi-to-pool", poi: groundedFromAmap(poi) });
   }
 
   function addPoiToDay(poi: AmapPoi, day: number) {
@@ -79,7 +86,7 @@ export function TripWorkbench({ initialPlan, initialNotes, tripId }: { initialPl
   }
 
   function savePrefs() {
-    void execute({ type: "set-transport-prefs", prefs: { shortKm: Number(shortKm), shortMode, longMode } });
+    void execute({ type: "set-transport-prefs", prefs: { shortKm: Number(shortKm), shortMode, longMode } }, { recalcAfterPrefs: true });
   }
 
   return (
@@ -90,6 +97,7 @@ export function TripWorkbench({ initialPlan, initialNotes, tripId }: { initialPl
           dayCount={plan.days.length}
           tripId={tripId}
           onPlace={(poolItemId, day) => void execute({ type: "place-pool-item", poolItemId, day })}
+          onPoiToPool={addPoiToPool}
           onPoiToDay={addPoiToDay}
         />
         <main className="flex min-w-0 flex-1 flex-col">
@@ -116,19 +124,31 @@ export function TripWorkbench({ initialPlan, initialNotes, tripId }: { initialPl
                 onDeleteDay={() => void execute({ type: "remove-day", day: index + 1 })}
                 onOptimize={() => void execute({ type: "optimize-day", day: index + 1 })}
                 onSetTransport={(segmentIndex, mode) => void execute({ type: "set-transport", day: index + 1, segmentIndex, mode })}
-                onRecalc={() => void patchRaw({ op: "recalc-transport", day: index + 1 })}
+                onRecalc={() => void execute({ type: "recalc-transport", day: index + 1 })}
                 onCardClick={(itemId) => setSelectedItemId(itemId)}
               />
             ))}
             <aside className="min-w-80 bg-muted/30 p-4">
               <h2 className="text-base font-semibold">地图</h2>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button type="button" onClick={() => setMapFocus("all")} className="rounded-md border px-2 py-1 text-xs">地图总览</button>
+                {plan.days.map((day, index) => (
+                  <button key={day.index ?? index} type="button" onClick={() => setMapFocus(index + 1)} className="rounded-md border px-2 py-1 text-xs">
+                    地图 Day {index + 1}
+                  </button>
+                ))}
+                <label className="flex items-center gap-1 text-xs">
+                  <input type="checkbox" checked={showPoolOnMap} onChange={(event) => setShowPoolOnMap(event.target.checked)} />
+                  显示池点
+                </label>
+              </div>
               <div className="mt-3 h-[calc(100%-2rem)]">
                 <WorkbenchMap
                   days={plan.days}
                   pool={plan.pool}
-                  focus="all"
+                  focus={mapFocus}
                   selectedItemId={selectedItemId}
-                  showPool
+                  showPool={showPoolOnMap}
                   onMarkerClick={(itemId) => setSelectedItemId(itemId)}
                 />
               </div>
@@ -145,13 +165,10 @@ export function TripWorkbench({ initialPlan, initialNotes, tripId }: { initialPl
       ) : null}
     </DndContext>
   );
-
-  async function patchRaw(body: object) {
-    const response = await fetch(`/api/trips/${tripId}/plan`, { method: "PATCH", body: JSON.stringify(body) });
-    if (response.ok) setPlan(await response.json());
-    else setMessage("保存失败,已回滚");
-  }
 }
+
+type DragSource = { origin?: "pool"; itemId?: string } | { origin?: "day"; itemId?: string; day: number };
+type DropTarget = { target: "pool" } | { target: "day"; day: number; index?: number };
 
 function ModeSelect({ label, value, onChange }: { label: string; value: TransportMode; onChange: (value: TransportMode) => void }) {
   return (
@@ -190,4 +207,36 @@ function findItem(plan: TripPlan, id: string) {
 
 function itemSourceNoteId(item: ReturnType<typeof findItem>) {
   return item?.poi?.sourceNoteId ?? (item as { sourceNoteId?: string } | undefined)?.sourceNoteId;
+}
+
+function reorderGroupIds(plan: TripPlan, dayNumber: number, itemId: string, targetItemIndex: number | undefined) {
+  const day = plan.days[dayNumber - 1];
+  if (!day) return undefined;
+  const groups = groupAdjacent(day.items);
+  const activeIndex = groups.findIndex((group) => group.id === itemId || group.items.some((item) => rawItemId(item) === itemId));
+  if (activeIndex < 0) return undefined;
+  const itemIndex = targetItemIndex ?? day.items.length;
+  let targetGroupIndex = groups.filter((group) => group.index < itemIndex).length;
+  if (targetGroupIndex > activeIndex) targetGroupIndex -= 1;
+  const ordered = groups.map((group) => group.id);
+  const [activeId] = ordered.splice(activeIndex, 1);
+  ordered.splice(targetGroupIndex, 0, activeId);
+  if (ordered.every((id, index) => id === groups[index].id)) return undefined;
+  return ordered;
+}
+
+function groupAdjacent(items: TripPlan["days"][number]["items"]) {
+  const groups: Array<{ id: string; index: number; items: TripPlan["days"][number]["items"] }> = [];
+  for (let index = 0; index < items.length; index++) {
+    const item = items[index];
+    const id = item.clusterKey ?? rawItemId(item);
+    const last = groups.at(-1);
+    if (last && item.clusterKey && last.id === item.clusterKey) last.items.push(item);
+    else groups.push({ id, index, items: [item] });
+  }
+  return groups;
+}
+
+function rawItemId(item: TripPlan["days"][number]["items"][number]) {
+  return item.poiId ?? item.id ?? item.name ?? "";
 }

@@ -44,6 +44,34 @@ describe("applyIntent", () => {
       longMode: "drive"
     });
     expect(mustApply(applyIntent(plan, { type: "optimize-day", day: 1 })).patchBody).toEqual({ op: "optimize-day", day: 1 });
+    expect(mustApply(applyIntent(plan, { type: "recalc-transport" })).patchBody).toEqual({ op: "recalc-transport" });
+  });
+
+  it("maps searched POIs to pool-add and treats it as an allowed growth path", () => {
+    const plan = samplePlan();
+    const result = mustApply(applyIntent(plan, { type: "add-poi-to-pool", poi: groundedPoi("manual-pool") }));
+
+    expect(result.optimisticPlan.pool.map((item) => item.id)).toEqual(["pool-1", "manual-pool"]);
+    expect(result.optimisticPlan.pool.at(-1)?.slot).toBeUndefined();
+    expect(result.optimisticPlan.pool.at(-1)?.transportToNext).toBeUndefined();
+    expect(result.patchBody).toEqual({ op: "pool-add", poi: groundedPoi("manual-pool") });
+    expect(itemIds(result.optimisticPlan)).toEqual([...itemIds(plan), "manual-pool"].sort());
+  });
+
+  it("keeps indexed pool and day drop targets in patch bodies and optimistic order", () => {
+    const plan = samplePlan();
+
+    const placed = mustApply(applyIntent(plan, { type: "place-pool-item", poolItemId: "pool-1", day: 1, index: 0 }));
+    expect(placed.optimisticPlan.days[0].items.map((item) => item.id)).toEqual(["pool-1", "a", "b"]);
+    expect(placed.patchBody).toEqual({ op: "add-item", poolItemId: "pool-1", day: 1, index: 0 });
+
+    const moved = mustApply(applyIntent(plan, { type: "move-day-item", fromDay: 1, toDay: 2, itemId: "a", toIndex: 1 }));
+    expect(moved.optimisticPlan.days.map((day) => day.items.map((item) => item.id))).toEqual([["b"], ["c", "a"]]);
+    expect(moved.patchBody).toEqual({ op: "move-item", fromDay: 1, toDay: 2, itemId: "a", toIndex: 1 });
+
+    const reordered = mustApply(applyIntent(plan, { type: "reorder-day", day: 1, orderedGroupIds: ["b", "a"] }));
+    expect(reordered.optimisticPlan.days[0].items.map((item) => item.id)).toEqual(["b", "a"]);
+    expect(reordered.patchBody).toEqual({ op: "reorder", day: 1, orderedIds: ["b", "a"] });
   });
 
   it("moves adjacent cluster groups as a unit", () => {
@@ -99,6 +127,21 @@ function samplePlan(): TripPlan {
 
 function item(id: string) {
   return { id, poiId: id, name: id, durationMin: 60, location: { lng: 121, lat: 31 } };
+}
+
+function groundedPoi(id: string) {
+  return {
+    id,
+    name: id,
+    type: "sight",
+    reason: "手动添加",
+    sourceNoteId: "manual",
+    sourceType: "manual",
+    verified: true,
+    amapId: id,
+    location: { lng: 121, lat: 31 },
+    address: `${id} addr`
+  } as const;
 }
 
 function itemIds(plan: TripPlan) {
