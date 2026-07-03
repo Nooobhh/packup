@@ -63,6 +63,88 @@ describe("AmapRestProvider", () => {
     expect(fetchJson.mock.calls[2][0]).toContain("/direction/transit/integrated");
   });
 
+  it("parses and dedupes driving step polylines", async () => {
+    const fetchJson = vi.fn().mockResolvedValue({
+      status: "1",
+      route: {
+        paths: [
+          {
+            duration: "600",
+            distance: "3200",
+            steps: [{ polyline: "121.1,31.1;121.2,31.2" }, { polyline: "121.2,31.2;121.3,31.3" }]
+          }
+        ]
+      }
+    });
+    const provider = new AmapRestProvider({ env: { AMAP_REST_KEY: "k" }, fetchJson });
+
+    await expect(provider.route({ lng: 1, lat: 2 }, { lng: 3, lat: 4 }, "drive")).resolves.toMatchObject({
+      durationMin: 10,
+      distanceKm: 3.2,
+      polyline: [
+        { lng: 121.1, lat: 31.1 },
+        { lng: 121.2, lat: 31.2 },
+        { lng: 121.3, lat: 31.3 }
+      ]
+    });
+  });
+
+  it("stitches transit walking and bus segment polylines while tolerating missing bus polylines", async () => {
+    const fetchJson = vi.fn().mockResolvedValue({
+      status: "1",
+      route: {
+        transits: [
+          {
+            duration: "1800",
+            distance: "5000",
+            segments: [
+              {
+                walking: { steps: [{ polyline: "121.1,31.1;121.2,31.2" }] },
+                bus: { buslines: [{ polyline: "121.2,31.2;121.3,31.3" }] }
+              },
+              {
+                walking: { steps: [{ polyline: "121.4,31.4;121.5,31.5" }] },
+                bus: { buslines: [{}] }
+              }
+            ]
+          }
+        ]
+      }
+    });
+    const provider = new AmapRestProvider({ env: { AMAP_REST_KEY: "k" }, fetchJson });
+
+    await expect(provider.route({ lng: 1, lat: 2 }, { lng: 3, lat: 4 }, "public")).resolves.toMatchObject({
+      polyline: [
+        { lng: 121.1, lat: 31.1 },
+        { lng: 121.2, lat: 31.2 },
+        { lng: 121.3, lat: 31.3 },
+        { lng: 121.4, lat: 31.4 },
+        { lng: 121.5, lat: 31.5 }
+      ]
+    });
+  });
+
+  it("omits polyline when route data has no polyline fields", async () => {
+    const fetchJson = vi.fn().mockResolvedValue({ status: "1", route: { paths: [{ duration: "600", distance: "3200", steps: [{}] }] } });
+    const provider = new AmapRestProvider({ env: { AMAP_REST_KEY: "k" }, fetchJson });
+
+    await expect(provider.route({ lng: 1, lat: 2 }, { lng: 3, lat: 4 }, "walk")).resolves.toEqual({ durationMin: 10, distanceKm: 3.2 });
+  });
+
+  it("thins long polylines to at most 500 points while preserving endpoints", async () => {
+    const points = Array.from({ length: 600 }, (_, index) => `${121 + index / 10_000},${31 + index / 10_000}`).join(";");
+    const fetchJson = vi.fn().mockResolvedValue({
+      status: "1",
+      route: { paths: [{ duration: "600", distance: "3200", steps: [{ polyline: points }] }] }
+    });
+    const provider = new AmapRestProvider({ env: { AMAP_REST_KEY: "k" }, fetchJson });
+
+    const result = await provider.route({ lng: 1, lat: 2 }, { lng: 3, lat: 4 }, "drive");
+    expect(result.polyline?.length).toBeLessThanOrEqual(500);
+    expect(result.polyline?.[0]).toEqual({ lng: 121, lat: 31 });
+    expect(result.polyline?.at(-1)).toEqual({ lng: 121.0599, lat: 31.0599 });
+  });
+
   it("falls back to straight-line walk estimate when route returns empty path", async () => {
     // 高德对极近距离/无公交方案返回空 transits,应降级估算而非抛错
     const fetchJson = vi.fn().mockResolvedValue({ status: "1", route: { transits: [] } });

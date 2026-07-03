@@ -65,7 +65,7 @@ export class AmapRestProvider implements MapProvider {
     };
   }
 
-  async route(from: LngLat, to: LngLat, mode: TransportMode): Promise<{ durationMin: number; distanceKm: number }> {
+  async route(from: LngLat, to: LngLat, mode: TransportMode): Promise<{ durationMin: number; distanceKm: number; polyline?: LngLat[] }> {
     const endpoint =
       mode === "drive" ? "/v3/direction/driving" : mode === "walk" ? "/v3/direction/walking" : "/v3/direction/transit/integrated";
     const response = await this.call(
@@ -77,14 +77,15 @@ export class AmapRestProvider implements MapProvider {
     );
     assertAmapOk(response);
     const route = response.route as Record<string, unknown> | undefined;
-    const path = (array(route?.paths)[0] ?? array(route?.transits)[0]) as Record<string, unknown> | undefined;
+    const path = (mode === "public" ? array(route?.transits)[0] : array(route?.paths)[0]) as Record<string, unknown> | undefined;
     // 高德对极近距离/无公交方案的点对会返回空 path/transits(香港同街相邻 POI 常见)。
     // 此时降级为直线距离 + 步行速度估算,而非炸掉整个排程。
     if (!path) return estimateWalk(from, to);
     const distanceKm = number(path.distance) / 1000;
     const durationMin = Math.round(number(path.duration) / 60);
     if (distanceKm === 0 && durationMin === 0) return estimateWalk(from, to);
-    return { durationMin, distanceKm };
+    const polyline = mode === "public" ? transitPolyline(path) : pathPolyline(path);
+    return polyline.length > 0 ? { durationMin, distanceKm, polyline } : { durationMin, distanceKm };
   }
 
   private url(endpoint: string, params: Record<string, string | undefined>) {
@@ -133,6 +134,52 @@ function estimateWalk(from: LngLat, to: LngLat) {
   const distanceKm = haversineKm(from, to) * 1.3;
   const durationMin = Math.max(5, Math.round((distanceKm / 5) * 60));
   return { durationMin, distanceKm };
+}
+
+function pathPolyline(path: Record<string, unknown>): LngLat[] {
+  return normalizePolyline(array(path.steps).flatMap((step) => parsePolylineString(string((step as Record<string, unknown>).polyline))));
+}
+
+function transitPolyline(transit: Record<string, unknown>): LngLat[] {
+  const points: LngLat[] = [];
+  for (const rawSegment of array(transit.segments)) {
+    const segment = rawSegment as Record<string, unknown>;
+    const walking = segment.walking as Record<string, unknown> | undefined;
+    for (const rawStep of array(walking?.steps)) {
+      points.push(...parsePolylineString(string((rawStep as Record<string, unknown>).polyline)));
+    }
+    const bus = segment.bus as Record<string, unknown> | undefined;
+    const busline = array(bus?.buslines)[0] as Record<string, unknown> | undefined;
+    points.push(...parsePolylineString(string(busline?.polyline)));
+  }
+  return normalizePolyline(points);
+}
+
+function parsePolylineString(value: string): LngLat[] {
+  if (!value) return [];
+  return value
+    .split(";")
+    .map((pair) => {
+      const [lng, lat] = pair.split(",").map(Number);
+      return Number.isFinite(lng) && Number.isFinite(lat) ? { lng, lat } : undefined;
+    })
+    .filter((point): point is LngLat => Boolean(point));
+}
+
+function normalizePolyline(points: LngLat[]): LngLat[] {
+  const deduped: LngLat[] = [];
+  for (const point of points) {
+    const previous = deduped.at(-1);
+    if (!previous || previous.lng !== point.lng || previous.lat !== point.lat) deduped.push(point);
+  }
+  if (deduped.length <= 500) return deduped;
+
+  const thinned: LngLat[] = [];
+  const last = deduped.length - 1;
+  for (let i = 0; i < 500; i++) {
+    thinned.push(deduped[Math.round((i * last) / 499)]);
+  }
+  return thinned;
 }
 
 async function defaultFetchJson(url: string) {
