@@ -18,7 +18,7 @@ export function DayTimeline({ day }: { day: PlanDay }) {
             <span>{item.durationMin} min</span>
             {item.reason ?? item.poi?.reason ? <span>{item.reason ?? item.poi?.reason}</span> : null}
             {item.note ? <span>{item.note}</span> : null}
-            {item.transportToNext ? <span>下一段 {item.transportToNext.mode}: {item.transportToNext.durationMin} min / {item.transportToNext.distanceKm} km</span> : null}
+            {item.transportToNext ? <span>下一段 {item.transportToNext.mode}: {item.transportToNext.durationMin} min / {item.transportToNext.distanceKm.toFixed(2)} km</span> : null}
           </div>
         </li>
       ))}

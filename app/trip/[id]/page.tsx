@@ -14,7 +14,7 @@ export default async function TripPage({ params }: { params: Promise<{ id: strin
   return (
     <main className="mx-auto max-w-5xl space-y-6 px-6 py-8">
       {plan.warnings.length ? <div className="rounded-lg border bg-yellow-50 p-4 text-sm">{plan.warnings.join(" / ")}</div> : null}
-      {plan.daysDecision ? <p className="text-sm text-muted-foreground">{typeof plan.daysDecision === "string" ? plan.daysDecision : plan.daysDecision.reason}</p> : null}
+      {renderDaysDecision(plan.daysDecision)}
       <FailedLinksSection failedLinks={failedLinks} />
       <div className="space-y-8">
         {plan.days.map((day, index) => (
@@ -30,6 +30,13 @@ export default async function TripPage({ params }: { params: Promise<{ id: strin
       <FilteredSection filtered={plan.filtered} />
     </main>
   );
+}
+
+function renderDaysDecision(decision: unknown) {
+  // 兼容历史落盘数据里 LLM 输出的字面量 "null" 等无意义字符串
+  const text = typeof decision === "string" ? decision : decision && typeof decision === "object" && "reason" in decision ? String((decision as { reason: unknown }).reason) : "";
+  if (!text.trim() || ["null", "none", "undefined"].includes(text.trim().toLowerCase())) return null;
+  return <p className="text-sm text-muted-foreground">{text}</p>;
 }
 
 async function readTripPayload(id: string) {

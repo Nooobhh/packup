@@ -267,6 +267,10 @@ function lowestPriorityIndex(items: PlanItem[]) {
 }
 
 function ensureDaysDecision(plan: TripPlan, input: TripInput) {
+  // LLM 偶尔把「无决策」输出成字面量字符串,清洗掉避免页面渲染出 "null"
+  if (typeof plan.daysDecision === "string" && ["null", "none", "undefined", ""].includes(plan.daysDecision.trim().toLowerCase())) {
+    plan.daysDecision = undefined;
+  }
   if (!input.days && !plan.daysDecision) {
     plan.daysDecision = { actualDays: plan.days.length, reason: `按内容量与 ${input.pace ?? "moderate"} 节奏推荐 ${plan.days.length} 天` };
   }
@@ -349,6 +353,6 @@ const planJsonSchema = {
     },
     filtered: { type: "array" },
     warnings: { type: "array" },
-    daysDecision: {}
+    daysDecision: { type: "string", description: "天数为浮动/缺省时的选择理由;固定天数时省略本字段" }
   }
 };
