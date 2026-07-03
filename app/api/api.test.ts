@@ -7,6 +7,8 @@ import { GET } from "./trips/[id]/route";
 import { GET as GET_CANDIDATES } from "./trips/[id]/candidates/route";
 import { PATCH as PATCH_PLAN } from "./trips/[id]/plan/route";
 import { POST as POST_SELECTION } from "./trips/[id]/selection/route";
+import { POST as POST_TRIP } from "./trips/route";
+import { GET as GET_POI_SEARCH } from "./pois/search/route";
 import type { StageEvent } from "@/lib/pipeline/types";
 
 let dataRoot: string;
@@ -22,6 +24,7 @@ afterEach(async () => {
   (globalThis as typeof globalThis & { __packupGeneratePipelineForTest?: unknown }).__packupGeneratePipelineForTest = undefined;
   (globalThis as typeof globalThis & { __packupPatchMapForTest?: unknown }).__packupPatchMapForTest = undefined;
   (globalThis as typeof globalThis & { __packupPatchAfterReadForTest?: unknown }).__packupPatchAfterReadForTest = undefined;
+  (globalThis as typeof globalThis & { __packupPoiSearchMapForTest?: unknown }).__packupPoiSearchMapForTest = undefined;
   await rm(dataRoot, { recursive: true, force: true });
 });
 
@@ -30,6 +33,13 @@ describe("POST /api/generate", () => {
     const res = await POST(new Request("http://test/api/generate", { method: "POST", body: JSON.stringify({ links: [] }) }));
     expect(res.status).toBe(400);
     expect(await res.json()).toHaveProperty("error");
+  });
+
+  it("guards missing or empty links before parsing manual-compatible trip input", async () => {
+    expect((await POST(new Request("http://test/api/generate", { method: "POST", body: JSON.stringify({ destination: "上海" }) }))).status).toBe(400);
+    const empty = await POST(new Request("http://test/api/generate", { method: "POST", body: JSON.stringify({ destination: "上海", links: [] }) }));
+    expect(empty.status).toBe(400);
+    expect(await empty.text()).toContain("至少提供一条链接");
   });
 
   it("streams stage events and a final await-selection event with tripId", async () => {
@@ -70,6 +80,89 @@ describe("POST /api/generate", () => {
     const res = await POST(new Request("http://test/api/generate", { method: "POST", body: JSON.stringify({ query: "帮我规划一个超级好玩的假期行程", links: ["u"] }) }));
     expect(res.status).toBe(400);
     expect(await res.text()).toContain("无法识别目的地");
+  });
+});
+
+describe("POST /api/trips", () => {
+  it("creates an empty manual trip with parseable input and plan", async () => {
+    const res = await POST_TRIP(new Request("http://test/api/trips", { method: "POST", body: JSON.stringify({ destination: "上海", days: { base: 3 }, startDate: "2026-07-10" }) }));
+    const json = await res.json();
+
+    expect(res.status).toBe(201);
+    expect(Object.keys(json)).toEqual(["tripId"]);
+
+    const trip = await GET(new Request(`http://test/api/trips/${json.tripId}`), { params: Promise.resolve({ id: json.tripId }) });
+    const payload = await trip.json();
+    expect(trip.status).toBe(200);
+    expect(payload.input).toMatchObject({ links: [], destination: "上海", transport: "public", pace: "moderate" });
+    expect(payload.plan.days).toHaveLength(3);
+    expect(payload.plan.pool).toEqual([]);
+    expect(payload.plan.transportPrefs).toEqual({ shortKm: 1, shortMode: "walk", longMode: "public" });
+    await expect(readFile(path.join(dataRoot, json.tripId, "10-notes.json"), "utf8")).rejects.toThrow();
+  });
+
+  it("rejects invalid manual trip bodies", async () => {
+    expect((await POST_TRIP(new Request("http://test/api/trips", { method: "POST", body: JSON.stringify({ destination: "上海", days: { base: 0 } }) }))).status).toBe(400);
+    expect((await POST_TRIP(new Request("http://test/api/trips", { method: "POST", body: JSON.stringify({ destination: "上海", days: { base: 16 } }) }))).status).toBe(400);
+    expect((await POST_TRIP(new Request("http://test/api/trips", { method: "POST", body: JSON.stringify({ destination: "", days: { base: 1 } }) }))).status).toBe(400);
+  });
+});
+
+describe("GET /api/pois/search", () => {
+  it("returns POI search results using trip destination as city", async () => {
+    await writeTrip("trip-search", {
+      input: { id: "trip-search", links: [], destination: "上海", transport: "public", pace: "moderate" },
+      notes: [],
+      pois: { pois: [], filtered: [] },
+      plan: { days: [{ index: 1, items: [] }], pool: [], filtered: [], warnings: [] }
+    });
+    const searchPois = vi.fn().mockResolvedValue([
+      { amapId: "a1", name: "外滩", location: { lng: 121.49, lat: 31.24 } },
+      { amapId: "a2", name: "豫园", location: { lng: 121.49, lat: 31.23 } }
+    ]);
+    (globalThis as typeof globalThis & { __packupPoiSearchMapForTest?: unknown }).__packupPoiSearchMapForTest = { searchPois };
+
+    const res = await GET_POI_SEARCH(new Request("http://test/api/pois/search?tripId=trip-search&q=%E6%99%AF%E7%82%B9"));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toHaveLength(2);
+    expect(searchPois).toHaveBeenCalledWith("景点", "上海", 8);
+  });
+
+  it("rejects bad POI search requests", async () => {
+    expect((await GET_POI_SEARCH(new Request("http://test/api/pois/search?q=x"))).status).toBe(400);
+    expect((await GET_POI_SEARCH(new Request("http://test/api/pois/search?tripId=missing&q=x"))).status).toBe(404);
+  });
+});
+
+describe("API chain workbench fixture", () => {
+  it("creates a manual trip, adds POIs, optimizes, moves, and preserves item multiset with transport", async () => {
+    const route = vi.fn().mockResolvedValue({ durationMin: 6, distanceKm: 1 });
+    (globalThis as typeof globalThis & { __packupPatchMapForTest?: unknown }).__packupPatchMapForTest = { route };
+
+    const created = await POST_TRIP(new Request("http://test/api/trips", { method: "POST", body: JSON.stringify({ destination: "上海", days: { base: 2 } }) }));
+    const { tripId } = await created.json();
+
+    for (const [index, id] of ["poi-a", "poi-b", "poi-c"].entries()) {
+      const res = await PATCH_PLAN(
+        new Request("http://test", {
+          method: "PATCH",
+          body: JSON.stringify({ op: "add-item", day: 1, poi: apiGroundedPoi(id, 121 + index * 0.01) })
+        }),
+        { params: Promise.resolve({ id: tripId }) }
+      );
+      expect(res.status).toBe(200);
+    }
+
+    expect((await PATCH_PLAN(new Request("http://test", { method: "PATCH", body: JSON.stringify({ op: "optimize-day", day: 1 }) }), { params: Promise.resolve({ id: tripId }) })).status).toBe(200);
+    expect((await PATCH_PLAN(new Request("http://test", { method: "PATCH", body: JSON.stringify({ op: "move-item", fromDay: 1, toDay: 2, itemId: "poi-b" }) }), { params: Promise.resolve({ id: tripId }) })).status).toBe(200);
+
+    const fetched = await GET(new Request(`http://test/api/trips/${tripId}`), { params: Promise.resolve({ id: tripId }) });
+    const payload = await fetched.json();
+    const ids = payload.plan.days.flatMap((day: { items: Array<{ id: string }> }) => day.items.map((item) => item.id)).sort();
+    const segments = payload.plan.days.flatMap((day: { items: Array<{ transportToNext?: unknown }> }) => day.items.map((item) => item.transportToNext).filter(Boolean));
+
+    expect(ids).toEqual(["poi-a", "poi-b", "poi-c"]);
+    expect(segments.length).toBeGreaterThan(0);
   });
 });
 
@@ -209,6 +302,21 @@ describe("GET /api/trips/[id]", () => {
       { url: "u1", reason: "fetch fail" },
       { url: "u2", reason: "extract fail" }
     ]);
+    expect(json.notes).toEqual([
+      { id: "n1", title: "", url: "u1", body: "" },
+      { id: "n2", title: "ok", url: "u2", body: "ok" }
+    ]);
+  });
+
+  it("returns empty notes when notes file is missing", async () => {
+    const dir = path.join(dataRoot, "trip-no-notes");
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "00-input.json"), JSON.stringify({ id: "trip-no-notes", links: [], destination: "上海", transport: "public", pace: "moderate" }), "utf8");
+    await writeFile(path.join(dir, "40-plan.json"), JSON.stringify({ days: [{ index: 1, items: [] }], pool: [], filtered: [], warnings: [] }), "utf8");
+
+    const res = await GET(new Request("http://test/api/trips/trip-no-notes"), { params: Promise.resolve({ id: "trip-no-notes" }) });
+    expect(res.status).toBe(200);
+    expect((await res.json()).notes).toEqual([]);
   });
 
   it("returns 404 for missing trip and 409 when an error checkpoint exists without a plan", async () => {
@@ -273,4 +381,18 @@ async function writeDiscontinuousClusterTrip(id: string) {
     filtered: [],
     warnings: []
   }), "utf8");
+}
+
+function apiGroundedPoi(id: string, lng: number) {
+  return {
+    id,
+    name: id,
+    type: "sight",
+    reason: "手动添加",
+    sourceNoteId: "manual",
+    sourceType: "manual",
+    verified: true,
+    amapId: id,
+    location: { lng, lat: 31 }
+  };
 }

@@ -15,6 +15,9 @@ export async function POST(request: Request) {
   }
 
   const body = raw as { id?: string; query?: string; destination?: string; links?: string[] };
+  if (!Array.isArray(body.links) || body.links.length === 0) {
+    return Response.json({ error: "至少提供一条链接" }, { status: 400 });
+  }
   let candidate: Record<string, unknown> = { ...(raw as object), id: body.id ?? nanoid(10) };
   if (body.query && !body.destination) {
     try {
@@ -73,6 +76,6 @@ function testDeps() {
   return {
     fetcher: { fetch: async () => [] },
     llm: { run: async () => "" },
-    map: { searchPoi: async () => null, route: async () => ({ durationMin: 0, distanceKm: 0 }) }
+    map: { searchPoi: async () => null, searchPois: async () => [], route: async () => ({ durationMin: 0, distanceKm: 0 }) }
   };
 }

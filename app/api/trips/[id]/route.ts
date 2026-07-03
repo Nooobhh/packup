@@ -28,8 +28,15 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
       reason: failed.reason
     }))
   ];
+  const responseNotes = notes.map((note) => ({
+    id: note.id,
+    title: note.title,
+    author: note.author,
+    url: note.url,
+    body: note.body
+  }));
 
-  return Response.json({ plan, failedLinks, input });
+  return Response.json({ plan, failedLinks, input, notes: responseNotes });
 }
 
 async function exists(file: string) {
