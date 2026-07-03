@@ -12,7 +12,7 @@ import { AmapRestProvider } from "@/lib/map/amap-rest";
 import type { MapProvider } from "@/lib/map/types";
 import { runExtract } from "./extract";
 import { runGround } from "./ground";
-import { runPlan } from "./plan";
+import { planItemFromPoi, runPlan } from "./plan";
 import {
   ExtractOutputSchema,
   FilteredItemSchema,
@@ -137,14 +137,17 @@ async function runPlanStage(input: TripInput, llm: LLMRunner, map: MapProvider, 
   const selectionFile = path.join(workDir, "25-selection.json");
   let selectedGrounded = ground.grounded;
   let filtered = ground.filtered;
+  let poolPois: GroundOutput["grounded"] = [];
   if (await exists(selectionFile)) {
     const selection = SelectionSchema.parse(await readJson(selectionFile));
     const selected = new Set(selection.selectedPoiIds);
     selectedGrounded = ground.grounded.filter((poi) => selected.has(poi.id ?? poi.amapId ?? poi.name));
+    const unselected = ground.grounded.filter((poi) => !selected.has(poi.id ?? poi.amapId ?? poi.name));
+    poolPois = unselected.filter((poi) => poi.verified === true && Boolean(poi.location));
     filtered = [
       ...ground.filtered,
-      ...ground.grounded
-        .filter((poi) => !selected.has(poi.id ?? poi.amapId ?? poi.name))
+      ...unselected
+        .filter((poi) => !(poi.verified === true && Boolean(poi.location)))
         .map((poi) =>
           FilteredItemSchema.parse({
             id: poi.id ?? poi.amapId ?? poi.name,
@@ -157,6 +160,12 @@ async function runPlanStage(input: TripInput, llm: LLMRunner, map: MapProvider, 
     ];
   }
   const plan = await runPlan(selectedGrounded, filtered, input, llm, map);
+  plan.pool = poolPois.map((poi) => {
+    const item = planItemFromPoi(poi, "morning", poi.id ?? poi.amapId ?? poi.name);
+    delete item.slot;
+    delete item.transportToNext;
+    return item;
+  });
   await writeJson(path.join(workDir, outputFiles.plan), TripPlanSchema.parse(plan));
 }
 

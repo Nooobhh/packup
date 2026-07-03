@@ -110,20 +110,37 @@ describe("runPipeline", () => {
     expect(deps.llm.run).toHaveBeenCalledTimes(1);
   });
 
-  it("filters grounded POIs by selection when resuming plan", async () => {
+  it("puts verified unselected POIs with locations into pool when resuming plan with selection", async () => {
     const dir = path.join(dataRoot, "trip-test");
     await mkdir(dir, { recursive: true });
     await writeFile(path.join(dir, "00-input.json"), JSON.stringify(input), "utf8");
-    await writeFile(path.join(dir, "30-grounded.json"), JSON.stringify({ grounded: [grounded("p1", "外滩"), grounded("p2", "豫园"), grounded("p3", "商场")], filtered: [] }), "utf8");
-    await writeFile(path.join(dir, "25-selection.json"), JSON.stringify({ selectedPoiIds: ["p1", "p2"], selectedAt: "2026-07-03T00:00:00.000Z" }), "utf8");
+    await writeFile(
+      path.join(dir, "30-grounded.json"),
+      JSON.stringify({
+        grounded: [
+          grounded("p1", "外滩"),
+          grounded("p2", "豫园"),
+          grounded("p3", "商场"),
+          { ...grounded("p4", "未验证店"), verified: false, amapId: undefined, location: undefined },
+          grounded("p5", "咖啡")
+        ],
+        filtered: []
+      }),
+      "utf8"
+    );
+    await writeFile(path.join(dir, "25-selection.json"), JSON.stringify({ selectedPoiIds: ["p1", "p2", "p5"], selectedAt: "2026-07-03T00:00:00.000Z" }), "utf8");
     const deps = depsForSuccess();
-    deps.llm.run = vi.fn().mockResolvedValue(JSON.stringify({ days: [{ slots: { morning: ["p1"], afternoon: ["p2"], evening: [] } }] }));
+    deps.llm.run = vi.fn().mockResolvedValue(JSON.stringify({ days: [{ slots: { morning: ["p1"], afternoon: ["p2"], evening: ["p5"] } }] }));
 
     await runPipeline(input, deps, { fromStage: "plan" });
 
     const plan = JSON.parse(await readFile(path.join(dir, "40-plan.json"), "utf8"));
-    expect(plan.days.flatMap((day: { items: Array<{ poiId: string }> }) => day.items.map((item) => item.poiId))).toEqual(["p1", "p2"]);
-    expect(plan.filtered).toEqual([expect.objectContaining({ id: "p3", stage: "plan", reason: "用户未选入排程" })]);
+    TripPlanSchema.parse(plan);
+    expect(plan.days.flatMap((day: { items: Array<{ poiId: string }> }) => day.items.map((item) => item.poiId))).toEqual(["p1", "p2", "p5"]);
+    expect(plan.pool.map((item: { poiId: string; slot?: string; transportToNext?: unknown }) => item.poiId)).toEqual(["p3"]);
+    expect(plan.pool[0].slot).toBeUndefined();
+    expect(plan.pool[0].transportToNext).toBeUndefined();
+    expect(plan.filtered).toEqual([expect.objectContaining({ id: "p4", stage: "plan", reason: "用户未选入排程" })]);
   });
 
   it("uses all grounded POIs when resuming plan without a selection file", async () => {
@@ -138,6 +155,7 @@ describe("runPipeline", () => {
 
     const plan = JSON.parse(await readFile(path.join(dir, "40-plan.json"), "utf8"));
     expect(plan.days.flatMap((day: { items: Array<{ poiId: string }> }) => day.items.map((item) => item.poiId))).toEqual(["p1", "p2", "p3"]);
+    expect(plan.pool).toEqual([]);
     expect(plan.filtered).toEqual([]);
   });
 
@@ -183,6 +201,7 @@ function depsForSuccess(): { fetcher: ContentFetcher & { fetch: ReturnType<typeo
     },
     map: {
       searchPoi: vi.fn().mockResolvedValue({ amapId: "a1", name: "外滩", cityName: "上海市", location: { lng: 1, lat: 1 }, address: "addr" }),
+      searchPois: vi.fn(),
       route: vi.fn().mockResolvedValue({ durationMin: 5, distanceKm: 1 })
     }
   };
