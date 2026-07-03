@@ -13,7 +13,14 @@ export default async function TripPage({ params }: { params: Promise<{ id: strin
   const { plan, failedLinks } = payload;
   return (
     <main className="mx-auto max-w-5xl space-y-6 px-6 py-8">
-      {plan.warnings.length ? <div className="rounded-lg border bg-yellow-50 p-4 text-sm">{plan.warnings.join(" / ")}</div> : null}
+      {plan.warnings.length ? (
+        <details className="rounded-lg border bg-yellow-50 p-4 text-sm">
+          <summary className="cursor-pointer font-medium">提示 {plan.warnings.length} 条</summary>
+          <ul className="mt-2 list-disc space-y-1 pl-5">
+            {plan.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+          </ul>
+        </details>
+      ) : null}
       {renderDaysDecision(plan.daysDecision)}
       <FailedLinksSection failedLinks={failedLinks} />
       <div className="space-y-8">

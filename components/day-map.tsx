@@ -63,9 +63,8 @@ export function verifiedMapPoints(day: PlanDay): MapPoint[] {
 }
 
 export function renderDayMapOverlays(AMap: AMapApi, map: AMapMap, day: PlanDay) {
-  const points = verifiedMapPoints(day);
   map.clearMap?.();
-  const markers = points.map(
+  const markers = clusteredMapPoints(day).map(
     (point) =>
       new AMap.Marker({
         title: point.name,
@@ -73,19 +72,54 @@ export function renderDayMapOverlays(AMap: AMapApi, map: AMapMap, day: PlanDay) 
       })
   );
   const overlays = [...markers];
-  if (points.length >= 2) {
+  let segmentCount = 0;
+  for (let index = 0; index < day.items.length - 1; index++) {
+    if ((day.items[index].verified ?? day.items[index].poi?.verified) !== true || (day.items[index + 1].verified ?? day.items[index + 1].poi?.verified) !== true) continue;
+    const from = day.items[index].location ?? day.items[index].poi?.location;
+    const to = day.items[index + 1].location ?? day.items[index + 1].poi?.location;
+    if (!from || !to) continue;
+    const polyline = day.items[index].transportToNext?.polyline;
+    const path = (polyline?.length ? polyline : [from, to]).map((point) => [point.lng, point.lat]);
     overlays.push(
       new AMap.Polyline({
-        path: points.map((point) => [point.location.lng, point.location.lat]),
+        path,
         strokeWeight: 4,
         strokeColor: "#2563eb"
       })
     );
+    segmentCount++;
+  }
+  if (segmentCount === 0) {
+    const fallbackPoints = clusteredMapPoints(day);
+    if (fallbackPoints.length >= 2) {
+      overlays.push(
+        new AMap.Polyline({
+          path: fallbackPoints.map((point) => [point.location.lng, point.location.lat]),
+          strokeWeight: 4,
+          strokeColor: "#2563eb"
+        })
+      );
+    }
   }
   if (overlays.length > 0) {
     map.add?.(overlays);
     map.setFitView?.(overlays);
   }
+}
+
+function clusteredMapPoints(day: PlanDay): MapPoint[] {
+  const groups = new Map<string, MapPoint[]>();
+  for (const item of day.items) {
+    const location = item.location ?? item.poi?.location;
+    const verified = item.verified ?? item.poi?.verified;
+    if (verified !== true || !location) continue;
+    const key = item.clusterKey ?? item.id ?? item.poiId ?? item.name ?? `${location.lng},${location.lat}`;
+    groups.set(key, [...(groups.get(key) ?? []), { name: item.name ?? item.poi?.name ?? "", location }]);
+  }
+  return Array.from(groups.values()).map((items) => ({
+    name: items.map((item) => item.name).join(" + "),
+    location: items[0].location
+  }));
 }
 
 function loadAmapSdk(key: string): Promise<AMapApi> {
