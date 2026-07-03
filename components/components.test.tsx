@@ -1,19 +1,34 @@
 import "@testing-library/jest-dom/vitest";
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TripForm } from "./trip-form";
 import { DayTimeline } from "./day-timeline";
 import { DayMap, renderDayMapOverlays } from "./day-map";
 import { CandidateList } from "./candidate-list";
 import { FailedLinksSection, FilteredSection } from "./filtered-section";
+import { TripWorkbench } from "./workbench/trip-workbench";
+import { DetailDrawer } from "./workbench/detail-drawer";
+import { WorkbenchMap } from "./workbench/workbench-map";
+import TripPage from "@/app/trip/[id]/page";
 
 const originalAmapKey = process.env.NEXT_PUBLIC_AMAP_JS_KEY;
+const originalDataDir = process.env.PACKUP_DATA_DIR;
+let componentDataRoot = "";
 
-afterEach(() => {
+beforeEach(() => {
+  componentDataRoot = "";
+});
+
+afterEach(async () => {
   process.env.NEXT_PUBLIC_AMAP_JS_KEY = originalAmapKey;
+  process.env.PACKUP_DATA_DIR = originalDataDir;
   delete (globalThis as typeof globalThis & { AMap?: unknown }).AMap;
   document.head.querySelector("#amap-js-sdk")?.remove();
+  if (componentDataRoot) await rm(componentDataRoot, { recursive: true, force: true });
 });
 
 describe("TripForm", () => {
@@ -62,6 +77,24 @@ describe("TripForm", () => {
     expect(link).toHaveAttribute("href", "/trip/trip-ui/select");
     global.fetch = originalFetch;
   });
+
+  it("submits the manual-from-zero form to create an empty trip", async () => {
+    const originalFetch = global.fetch;
+    const originalLocation = window.location;
+    Object.defineProperty(window, "location", { value: { href: "" }, writable: true });
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ tripId: "manual-1" }) }) as typeof fetch;
+    render(<TripForm />);
+
+    fireEvent.change(screen.getByLabelText("手动目的地"), { target: { value: "上海" } });
+    fireEvent.change(screen.getByLabelText("手动天数"), { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: "手动从零" }));
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith("/api/trips", expect.objectContaining({ method: "POST" })));
+    expect(JSON.parse((global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body)).toEqual({ destination: "上海", days: { base: 2 } });
+    expect(window.location.href).toBe("/trip/manual-1");
+    global.fetch = originalFetch;
+    Object.defineProperty(window, "location", { value: originalLocation, writable: true });
+  });
 });
 
 describe("CandidateList", () => {
@@ -79,8 +112,89 @@ describe("CandidateList", () => {
 
     expect(screen.getByLabelText("外滩")).toBeChecked();
     expect(screen.getByLabelText("小店")).not.toBeChecked();
+    expect(screen.getByText(/未选中的地点会进入工作台待计划池/)).toBeInTheDocument();
+    expect(screen.getByText(/重新排程将覆盖工作台里的已有编辑/)).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("外滩"));
     expect(screen.getByRole("button", { name: "排程" })).toBeDisabled();
+  });
+});
+
+describe("TripPage", () => {
+  it("renders the workbench for a payload with pool items", async () => {
+    componentDataRoot = await mkdtemp(path.join(os.tmpdir(), "trip-page-"));
+    process.env.PACKUP_DATA_DIR = componentDataRoot;
+    const dir = path.join(componentDataRoot, "trip-page");
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "00-input.json"), JSON.stringify({ id: "trip-page", links: [], destination: "上海", transport: "public", pace: "moderate" }), "utf8");
+    await writeFile(path.join(dir, "10-notes.json"), JSON.stringify([{ id: "n1", title: "笔记", url: "u", body: "外滩", images: [], fetchStatus: "ok" }]), "utf8");
+    await writeFile(path.join(dir, "20-pois.json"), JSON.stringify({ pois: [], filtered: [] }), "utf8");
+    await writeFile(path.join(dir, "40-plan.json"), JSON.stringify(workbenchPlan()), "utf8");
+
+    render(await TripPage({ params: Promise.resolve({ id: "trip-page" }) }));
+
+    expect(screen.getByText("待计划池")).toBeInTheDocument();
+    expect(screen.getByText("Day 1")).toBeInTheDocument();
+  });
+});
+
+describe("TripWorkbench", () => {
+  it("renders lanes, pool cards, and type counts", () => {
+    render(<TripWorkbench tripId="trip-1" initialPlan={workbenchPlan()} initialNotes={[]} />);
+
+    expect(screen.getByText("待计划池")).toBeInTheDocument();
+    expect(screen.getByText("Day 1")).toBeInTheDocument();
+    expect(screen.getByText("Day 2")).toBeInTheDocument();
+    expect(screen.getByText("food 2")).toBeInTheDocument();
+    expect(screen.getAllByTestId("pool-card")).toHaveLength(3);
+  });
+
+  it("shows update warning and refreshes after a 409 patch response", async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 409, json: async () => ({ error: "行程已更新" }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ plan: workbenchPlan(), notes: [] }) }) as typeof fetch;
+    render(<TripWorkbench tripId="trip-1" initialPlan={workbenchPlan()} initialNotes={[]} />);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "加入 Day 1" })[0]);
+
+    expect(await screen.findByText(/行程已更新/)).toBeInTheDocument();
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith("/api/trips/trip-1"));
+    global.fetch = originalFetch;
+  });
+
+  it("rolls back optimistic state after a failed patch response", async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({ error: "server error" }) }) as typeof fetch;
+    render(<TripWorkbench tripId="trip-1" initialPlan={workbenchPlan()} initialNotes={[]} />);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "加入 Day 1" })[0]);
+
+    await screen.findByText(/保存失败/);
+    expect(screen.getAllByTestId("pool-card")).toHaveLength(3);
+    global.fetch = originalFetch;
+  });
+});
+
+describe("WorkbenchMap and DetailDrawer", () => {
+  it("renders detail excerpts, fallback full body, and manual source state", () => {
+    const item = { id: "i1", name: "外滩", type: "sight", durationMin: 60, reason: "推荐理由", sourceNoteId: "n1" };
+    const { rerender } = render(<DetailDrawer item={item} note={{ id: "n1", title: "上海笔记", url: "https://example.com", body: `前文${"很".repeat(30)}外滩${"好".repeat(30)}后文` }} onClose={() => undefined} />);
+    expect(screen.getAllByText("推荐理由").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/外滩/).length).toBeGreaterThan(0);
+    expect(screen.getByRole("link", { name: "查看原笔记" })).toHaveAttribute("href", "https://example.com");
+
+    rerender(<DetailDrawer item={{ ...item, sourceNoteId: "n1" }} note={{ id: "n1", title: "无匹配", url: "u", body: "这是一段没有地点名的正文" }} onClose={() => undefined} />);
+    expect(screen.getByText("这是一段没有地点名的正文")).toBeInTheDocument();
+
+    rerender(<DetailDrawer item={{ ...item, sourceNoteId: "manual" }} onClose={() => undefined} />);
+    expect(screen.getByText("手动添加")).toBeInTheDocument();
+  });
+
+  it("renders workbench map placeholder when key is missing", () => {
+    delete process.env.NEXT_PUBLIC_AMAP_JS_KEY;
+    render(<WorkbenchMap days={workbenchPlan().days} pool={workbenchPlan().pool} focus="all" selectedItemId={null} showPool={false} onMarkerClick={() => undefined} />);
+    expect(screen.getByText("地图 key 未配置")).toBeInTheDocument();
   });
 });
 
@@ -151,6 +265,22 @@ describe("DayTimeline", () => {
     expect(screen.getByText(/B reason/)).toBeInTheDocument();
   });
 });
+
+function workbenchPlan() {
+  return {
+    days: [
+      { index: 1, date: "2026-07-10", items: [{ id: "d1", name: "外滩", type: "sight", durationMin: 60, location: { lng: 121.49, lat: 31.24 } }] },
+      { index: 2, items: [{ id: "d2", name: "豫园", type: "sight", durationMin: 60, location: { lng: 121.48, lat: 31.23 } }] }
+    ],
+    pool: [
+      { id: "p1", name: "咖啡", type: "food", durationMin: 45, location: { lng: 121.47, lat: 31.22 } },
+      { id: "p2", name: "面馆", type: "food", durationMin: 45, location: { lng: 121.46, lat: 31.21 } },
+      { id: "p3", name: "商店", type: "shop", durationMin: 45, location: { lng: 121.45, lat: 31.2 } }
+    ],
+    filtered: [],
+    warnings: []
+  };
+}
 
 describe("conditional sections", () => {
   it("renders filtered and failed links only when non-empty", () => {

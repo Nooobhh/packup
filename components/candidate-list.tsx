@@ -66,6 +66,7 @@ export function CandidateList({ tripId, grounded, filtered }: { tripId: string; 
       </section>
       {filtered.length ? <p className="text-sm text-muted-foreground">另有 {filtered.length} 项已过滤</p> : null}
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      <p className="text-sm text-muted-foreground">未选中的地点会进入工作台待计划池；重新排程将覆盖工作台里的已有编辑。</p>
       <button type="button" disabled={selected.size === 0} onClick={submit} className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50">
         排程
       </button>

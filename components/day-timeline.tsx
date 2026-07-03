@@ -2,7 +2,7 @@ import React from "react";
 import type { PlanDay, PlanItem, Slot } from "@/lib/pipeline/types";
 
 const SLOT_LABEL: Record<Slot, string> = { morning: "上午", afternoon: "下午", evening: "晚上" };
-const MODE_LABEL: Record<string, string> = { walk: "步行", public: "公交", drive: "驾车" };
+const MODE_LABEL: Record<string, string> = { walk: "步行", public: "公交", drive: "驾车", bike: "骑行" };
 
 export function DayTimeline({ day }: { day: PlanDay }) {
   const hasSlots = day.items.some((item) => item.slot);

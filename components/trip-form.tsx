@@ -11,6 +11,8 @@ export function TripForm() {
   const [events, setEvents] = useState<StageEvent[]>([]);
   const [error, setError] = useState("");
   const [tripId, setTripId] = useState("");
+  const [manualDestination, setManualDestination] = useState("");
+  const [manualDays, setManualDays] = useState("3");
   const links = useMemo(() => normalizeLinks(linksText), [linksText]);
 
   async function submit(event: React.FormEvent) {
@@ -56,6 +58,23 @@ export function TripForm() {
     }
   }
 
+  async function submitManual() {
+    setError("");
+    const destination = manualDestination.trim();
+    const days = Number(manualDays);
+    if (!destination || !Number.isInteger(days)) {
+      setError("请填写手动行程目的地和天数");
+      return;
+    }
+    const response = await fetch("/api/trips", { method: "POST", body: JSON.stringify({ destination, days: { base: days } }) });
+    if (!response.ok) {
+      setError("创建空行程失败");
+      return;
+    }
+    const payload = await response.json();
+    window.location.href = `/trip/${payload.tripId}`;
+  }
+
   return (
     <main className="mx-auto max-w-3xl px-6 py-8">
       <form onSubmit={submit} className="space-y-5 rounded-lg border bg-card p-5">
@@ -81,6 +100,21 @@ export function TripForm() {
         ) : null}
         <button type="submit" className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">生成行程</button>
       </form>
+      <section className="mt-5 space-y-4 rounded-lg border bg-card p-5">
+        <div className="grid gap-3 sm:grid-cols-[1fr_120px_auto]">
+          <label className="block text-sm font-medium">
+            手动目的地
+            <input value={manualDestination} onChange={(event) => setManualDestination(event.target.value)} className="mt-2 w-full rounded-md border p-3 text-sm" />
+          </label>
+          <label className="block text-sm font-medium">
+            手动天数
+            <input type="number" min={1} max={15} value={manualDays} onChange={(event) => setManualDays(event.target.value)} className="mt-2 w-full rounded-md border p-3 text-sm" />
+          </label>
+          <div className="flex items-end">
+            <button type="button" onClick={submitManual} className="rounded-md border px-4 py-3 text-sm font-medium">手动从零</button>
+          </div>
+        </div>
+      </section>
       <ProgressStream events={events} />
     </main>
   );
