@@ -3,12 +3,55 @@ import path from "node:path";
 import { z } from "zod";
 import { AmapRestProvider } from "@/lib/map/amap-rest";
 import type { MapProvider } from "@/lib/map/types";
-import { recommendLegTransport } from "@/lib/pipeline/plan";
-import { TransportModeSchema, TripPlanSchema, type LngLat, type PlanItem, type TripPlan, type TransportMode } from "@/lib/pipeline/types";
+import { BUDGETS } from "@/lib/pipeline/budgets";
+import { nearestClusterOrder, planItemFromPoi, recommendLegTransport } from "@/lib/pipeline/plan";
+import {
+  GroundedPoiSchema,
+  TransportModeSchema,
+  TransportPrefsSchema,
+  TripPlanSchema,
+  type LngLat,
+  type PlanDay,
+  type PlanItem,
+  type TripPlan,
+  type TransportMode,
+  type TransportPrefs
+} from "@/lib/pipeline/types";
 
 const PatchSchema = z.discriminatedUnion("op", [
   z.object({ op: z.literal("reorder"), day: z.number().int().positive(), orderedIds: z.array(z.string()).min(1) }),
-  z.object({ op: z.literal("set-transport"), day: z.number().int().positive(), segmentIndex: z.number().int().nonnegative(), mode: TransportModeSchema })
+  z.object({ op: z.literal("set-transport"), day: z.number().int().positive(), segmentIndex: z.number().int().nonnegative(), mode: TransportModeSchema }),
+  z.object({
+    op: z.literal("add-item"),
+    day: z.number().int().positive(),
+    index: z.number().int().nonnegative().optional(),
+    poolItemId: z.string().optional(),
+    poi: GroundedPoiSchema.optional()
+  }),
+  z.object({ op: z.literal("remove-item"), day: z.number().int().positive(), itemId: z.string().min(1) }),
+  z.object({
+    op: z.literal("move-item"),
+    fromDay: z.number().int().positive(),
+    toDay: z.number().int().positive(),
+    itemId: z.string().min(1),
+    toIndex: z.number().int().nonnegative().optional()
+  }),
+  z.object({
+    op: z.literal("update-item"),
+    day: z.number().int().positive(),
+    itemId: z.string().min(1),
+    set: z.object({
+      note: z.string().optional(),
+      startTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+      durationMin: z.number().int().positive().optional()
+    })
+  }),
+  z.object({ op: z.literal("add-day"), theme: z.string().optional() }),
+  z.object({ op: z.literal("remove-day"), day: z.number().int().positive() }),
+  z.object({ op: z.literal("set-day-theme"), day: z.number().int().positive(), theme: z.string() }),
+  z.object({ op: z.literal("optimize-day"), day: z.number().int().positive() }),
+  z.object({ op: z.literal("set-transport-prefs"), shortKm: z.number().positive(), shortMode: TransportModeSchema, longMode: TransportModeSchema }),
+  z.object({ op: z.literal("recalc-transport"), day: z.number().int().positive().optional() })
 ]);
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -28,16 +71,50 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   const originalRaw = await readFile(file, "utf8");
   const plan = TripPlanSchema.parse(JSON.parse(originalRaw));
   await (globalThis as typeof globalThis & { __packupPatchAfterReadForTest?: (file: string) => Promise<void> | void }).__packupPatchAfterReadForTest?.(file);
-  const day = plan.days[patch.data.day - 1];
-  if (!day) return Response.json({ error: "day 越界" }, { status: 400 });
   const map = getMap();
 
   try {
-    if (patch.data.op === "reorder") {
-      await applyReorder(day.items, patch.data.orderedIds, map);
-    } else {
-      if (patch.data.segmentIndex < 0 || patch.data.segmentIndex >= day.items.length - 1) return Response.json({ error: "segmentIndex 越界" }, { status: 400 });
-      await setTransport(day.items, patch.data.segmentIndex, patch.data.mode, map);
+    switch (patch.data.op) {
+      case "reorder":
+        await applyReorder(dayAt(plan, patch.data.day).items, patch.data.orderedIds, map, plan.transportPrefs);
+        break;
+      case "set-transport":
+        await applySetTransport(dayAt(plan, patch.data.day).items, patch.data.segmentIndex, patch.data.mode, map);
+        break;
+      case "add-item":
+        await applyAddItem(plan, patch.data, map);
+        break;
+      case "remove-item":
+        await applyRemoveItem(plan, patch.data.day, patch.data.itemId, map);
+        break;
+      case "move-item":
+        await applyMoveItem(plan, patch.data.fromDay, patch.data.toDay, patch.data.itemId, patch.data.toIndex, map);
+        break;
+      case "update-item":
+        applyUpdateItem(plan, patch.data.day, patch.data.itemId, patch.data.set);
+        break;
+      case "add-day":
+        plan.days.push({ index: plan.days.length + 1, theme: patch.data.theme, items: [] });
+        break;
+      case "remove-day":
+        applyRemoveDay(plan, patch.data.day);
+        break;
+      case "set-day-theme":
+        applySetDayTheme(plan, patch.data.day, patch.data.theme);
+        break;
+      case "optimize-day":
+        await applyOptimizeDay(plan, patch.data.day, map);
+        break;
+      case "set-transport-prefs":
+        plan.transportPrefs = TransportPrefsSchema.parse({
+          shortKm: patch.data.shortKm,
+          shortMode: patch.data.shortMode,
+          longMode: patch.data.longMode
+        });
+        break;
+      case "recalc-transport":
+        await applyRecalcTransport(plan, patch.data.day, map);
+        break;
     }
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
@@ -51,25 +128,117 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   return Response.json(parsed);
 }
 
-async function applyReorder(items: PlanItem[], orderedIds: string[], map: Pick<MapProvider, "route">) {
+async function applyAddItem(
+  plan: TripPlan,
+  patch: { day: number; index?: number; poolItemId?: string; poi?: z.infer<typeof GroundedPoiSchema> },
+  map: Pick<MapProvider, "route">
+) {
+  if (Boolean(patch.poolItemId) === Boolean(patch.poi)) throw new Error("poolItemId 或 poi 必须且只能提供一个");
+  const day = dayAt(plan, patch.day);
+  const index = insertionIndex(day.items, patch.index);
+  const group = patch.poolItemId
+    ? takeGroup(plan.pool, patch.poolItemId)
+    : [
+        planItemFromPoi(
+          patch.poi!,
+          "morning",
+          patch.poi!.id ?? patch.poi!.amapId ?? patch.poi!.name
+        )
+      ];
+  day.items.splice(index, 0, ...group);
+  await recomputeInsertion(day, index, group.length, map, plan.transportPrefs);
+}
+
+async function applyRemoveItem(plan: TripPlan, dayNumber: number, itemIdToRemove: string, map: Pick<MapProvider, "route">) {
+  const day = dayAt(plan, dayNumber);
+  const { group, index } = takeGroupWithIndex(day.items, itemIdToRemove);
+  clearForPool(group);
+  plan.pool.push(...group);
+  await recomputeRemoval(day, index, map, plan.transportPrefs);
+}
+
+async function applyMoveItem(
+  plan: TripPlan,
+  fromDayNumber: number,
+  toDayNumber: number,
+  itemIdToMove: string,
+  toIndex: number | undefined,
+  map: Pick<MapProvider, "route">
+) {
+  const fromDay = dayAt(plan, fromDayNumber);
+  const { group, index } = takeGroupWithIndex(fromDay.items, itemIdToMove);
+  await recomputeRemoval(fromDay, index, map, plan.transportPrefs);
+  const toDay = dayAt(plan, toDayNumber);
+  const indexInTarget = insertionIndex(toDay.items, toIndex);
+  toDay.items.splice(indexInTarget, 0, ...group);
+  await recomputeInsertion(toDay, indexInTarget, group.length, map, plan.transportPrefs);
+}
+
+function applyUpdateItem(plan: TripPlan, dayNumber: number, target: string, set: { note?: string; startTime?: string; durationMin?: number }) {
+  if (Object.keys(set).length === 0) throw new Error("set 至少提供一个字段");
+  const day = dayAt(plan, dayNumber);
+  const group = findGroup(day.items, target);
+  if (!group) throw new Error("itemId 不存在");
+  for (const item of group.items) Object.assign(item, set);
+}
+
+function applyRemoveDay(plan: TripPlan, dayNumber: number) {
+  if (plan.days.length <= 1) throw new Error("至少保留一天");
+  const index = dayNumber - 1;
+  const [removed] = plan.days.splice(index, 1);
+  if (!removed) throw new Error("day 越界");
+  const items = [...removed.items];
+  clearForPool(items);
+  plan.pool.push(...items);
+  reindexDays(plan.days);
+}
+
+function applySetDayTheme(plan: TripPlan, dayNumber: number, theme: string) {
+  const day = dayAt(plan, dayNumber);
+  if (theme.trim() === "") delete day.theme;
+  else day.theme = theme;
+}
+
+async function applyOptimizeDay(plan: TripPlan, dayNumber: number, map: Pick<MapProvider, "route">) {
+  const day = dayAt(plan, dayNumber);
+  const oldPair = adjacentPairMap(day.items);
+  const reordered = nearestClusterOrder(day.items).flatMap((group) => group.items);
+  day.items.splice(0, day.items.length, ...reordered);
+  await fillDayWithPairReuse(day, oldPair, map, plan.transportPrefs);
+}
+
+async function applyRecalcTransport(plan: TripPlan, dayNumber: number | undefined, map: Pick<MapProvider, "route">) {
+  const days = dayNumber ? [dayAt(plan, dayNumber)] : plan.days;
+  const deadline = Date.now() + BUDGETS.planRoutesMs;
+  let timedOut = false;
+  for (const day of days) {
+    for (let i = 0; i < day.items.length - 1; i++) {
+      if (Date.now() >= deadline) {
+        timedOut = true;
+        break;
+      }
+      day.items[i].transportToNext = undefined;
+      await recommendAt(day, i, map, plan.transportPrefs, deadline);
+    }
+    if (day.items.length > 0) day.items.at(-1)!.transportToNext = undefined;
+    if (timedOut) break;
+  }
+  if (timedOut) plan.warnings.push("交通重算超时,剩余路段保留原值");
+}
+
+async function applyReorder(items: PlanItem[], orderedIds: string[], map: Pick<MapProvider, "route">, prefs?: TransportPrefs) {
   const groups = groupItems(items);
   const byId = new Map(groups.map((group) => [group.id, group.items]));
   if (!sameMembers(orderedIds, Array.from(byId.keys()))) throw new Error("orderedIds 与当天 items 集合不一致");
 
-  const oldPair = new Map<string, PlanItem["transportToNext"]>();
-  for (let i = 0; i < items.length - 1; i++) oldPair.set(`${itemId(items[i])}->${itemId(items[i + 1])}`, items[i].transportToNext);
+  const oldPair = adjacentPairMap(items);
   const reordered = orderedIds.flatMap((id) => byId.get(id)!);
   items.splice(0, items.length, ...reordered);
-
-  for (let i = 0; i < items.length; i++) items[i].transportToNext = undefined;
-  for (let i = 0; i < items.length - 1; i++) {
-    const reused = oldPair.get(`${itemId(items[i])}->${itemId(items[i + 1])}`);
-    if (reused) items[i].transportToNext = reused;
-    else await recommendTransport(items, i, map);
-  }
+  await fillDayWithPairReuse({ items }, oldPair, map, prefs);
 }
 
-async function setTransport(items: PlanItem[], index: number, mode: TransportMode, map: Pick<MapProvider, "route">) {
+async function applySetTransport(items: PlanItem[], index: number, mode: TransportMode, map: Pick<MapProvider, "route">) {
+  if (index < 0 || index >= items.length - 1) throw new Error("segmentIndex 越界");
   const from = itemLocation(items[index]);
   const to = itemLocation(items[index + 1]);
   if (!from || !to) throw new Error("segment location missing");
@@ -77,9 +246,94 @@ async function setTransport(items: PlanItem[], index: number, mode: TransportMod
   items[index].transportToNext = { ...route, mode };
 }
 
-async function recommendTransport(items: PlanItem[], index: number, map: Pick<MapProvider, "route">) {
-  const route = await recommendLegTransport(items[index], items[index + 1], { transport: "public" }, map);
-  if (route) items[index].transportToNext = route;
+async function fillDayWithPairReuse(day: Pick<PlanDay, "items">, oldPair: Map<string, PlanItem["transportToNext"]>, map: Pick<MapProvider, "route">, prefs?: TransportPrefs) {
+  for (let i = 0; i < day.items.length; i++) day.items[i].transportToNext = undefined;
+  for (let i = 0; i < day.items.length - 1; i++) {
+    const key = pairKey(day.items[i], day.items[i + 1]);
+    if (oldPair.has(key)) day.items[i].transportToNext = oldPair.get(key);
+    else await recommendAt(day, i, map, prefs);
+  }
+}
+
+async function recomputeInsertion(day: PlanDay, index: number, groupLength: number, map: Pick<MapProvider, "route">, prefs?: TransportPrefs) {
+  if (index > 0) await recommendAt(day, index - 1, map, prefs);
+  await recommendAt(day, index + groupLength - 1, map, prefs);
+}
+
+async function recomputeRemoval(day: PlanDay, removedIndex: number, map: Pick<MapProvider, "route">, prefs?: TransportPrefs) {
+  if (removedIndex > 0) await recommendAt(day, removedIndex - 1, map, prefs);
+  if (day.items.length > 0) day.items.at(-1)!.transportToNext = undefined;
+}
+
+async function recommendAt(day: Pick<PlanDay, "items">, index: number, map: Pick<MapProvider, "route">, prefs?: TransportPrefs, deadline = Number.POSITIVE_INFINITY) {
+  if (index < 0 || index >= day.items.length - 1) {
+    if (day.items[index]) day.items[index].transportToNext = undefined;
+    return;
+  }
+  day.items[index].transportToNext = undefined;
+  try {
+    const route = await recommendLegTransport(day.items[index], day.items[index + 1], { transport: "public" }, map, deadline, prefs);
+    if (route) day.items[index].transportToNext = route;
+  } catch {
+    day.items[index].transportToNext = undefined;
+  }
+}
+
+function adjacentPairMap(items: PlanItem[]) {
+  const oldPair = new Map<string, PlanItem["transportToNext"]>();
+  for (let i = 0; i < items.length - 1; i++) oldPair.set(pairKey(items[i], items[i + 1]), items[i].transportToNext);
+  return oldPair;
+}
+
+function pairKey(from: PlanItem, to: PlanItem) {
+  return `${itemId(from)}->${itemId(to)}`;
+}
+
+function dayAt(plan: TripPlan, dayNumber: number) {
+  const day = plan.days[dayNumber - 1];
+  if (!day) throw new Error("day 越界");
+  return day;
+}
+
+function insertionIndex(items: PlanItem[], index: number | undefined) {
+  const resolved = index ?? items.length;
+  if (resolved < 0 || resolved > items.length) throw new Error("index 越界");
+  return resolved;
+}
+
+function takeGroup(items: PlanItem[], target: string) {
+  return takeGroupWithIndex(items, target).group;
+}
+
+function takeGroupWithIndex(items: PlanItem[], target: string) {
+  const group = findGroup(items, target);
+  if (!group) throw new Error("itemId 不存在");
+  const [removed] = items.splice(group.index, group.items.length);
+  const removedGroup = [removed, ...items.splice(group.index, group.items.length - 1)].filter(Boolean);
+  return { group: removedGroup, index: group.index };
+}
+
+function findGroup(items: PlanItem[], target: string) {
+  const groups = groupItems(items);
+  let index = 0;
+  for (const group of groups) {
+    if (group.id === target || group.items.some((item) => rawItemId(item) === target)) return { ...group, index };
+    index += group.items.length;
+  }
+  return undefined;
+}
+
+function clearForPool(items: PlanItem[]) {
+  for (const item of items) {
+    delete item.slot;
+    delete item.transportToNext;
+  }
+}
+
+function reindexDays(days: PlanDay[]) {
+  days.forEach((day, index) => {
+    day.index = index + 1;
+  });
 }
 
 function groupItems(items: PlanItem[]) {
@@ -104,6 +358,10 @@ function sameMembers(a: string[], b: string[]) {
 
 function itemId(item: PlanItem) {
   return item.clusterKey ?? item.poiId ?? item.id ?? item.name ?? "";
+}
+
+function rawItemId(item: PlanItem) {
+  return item.poiId ?? item.id ?? item.name ?? "";
 }
 
 function itemLocation(item: PlanItem): LngLat | undefined {
