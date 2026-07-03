@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { TripInputSchema, TripPlanSchema } from "./types";
+import {
+  PlanItemSchema,
+  SelectionSchema,
+  StageEventSchema,
+  TransportToNextSchema,
+  TripInputSchema,
+  TripPlanSchema
+} from "./types";
 
 describe("TripInputSchema", () => {
   const valid = {
@@ -13,6 +20,14 @@ describe("TripInputSchema", () => {
 
   it("parses a valid trip input", () => {
     expect(TripInputSchema.parse(valid).destination).toBe("上海");
+  });
+
+  it("parses query and preferences while remaining compatible with old inputs", () => {
+    expect(TripInputSchema.parse({ ...valid, query: "上海3天 city walk", preferences: ["city walk", "美食"] })).toMatchObject({
+      query: "上海3天 city walk",
+      preferences: ["city walk", "美食"]
+    });
+    expect(TripInputSchema.parse(valid).query).toBeUndefined();
   });
 
   it.each([
@@ -71,5 +86,51 @@ describe("TripPlanSchema", () => {
       "ground",
       "plan"
     ]);
+  });
+});
+
+describe("PlanItemSchema", () => {
+  it("parses legacy minute items and new slot items", () => {
+    expect(PlanItemSchema.parse({ name: "外滩", startTime: "09:00", durationMin: 60 }).startTime).toBe("09:00");
+    expect(PlanItemSchema.parse({ name: "外滩", slot: "morning", durationMin: 60 })).toMatchObject({
+      slot: "morning",
+      durationMin: 60
+    });
+  });
+});
+
+describe("TransportToNextSchema", () => {
+  it("parses routes with and without polyline", () => {
+    expect(TransportToNextSchema.parse({ mode: "walk", durationMin: 10, distanceKm: 0.8 }).polyline).toBeUndefined();
+    expect(
+      TransportToNextSchema.parse({
+        mode: "walk",
+        durationMin: 10,
+        distanceKm: 0.8,
+        polyline: [
+          { lng: 121.1, lat: 31.1 },
+          { lng: 121.2, lat: 31.2 }
+        ]
+      }).polyline
+    ).toHaveLength(2);
+  });
+});
+
+describe("SelectionSchema", () => {
+  it("requires at least one selected POI id", () => {
+    expect(SelectionSchema.parse({ selectedPoiIds: ["p1"], selectedAt: "2026-07-03T00:00:00.000Z" }).selectedPoiIds).toEqual(["p1"]);
+    expect(() => SelectionSchema.parse({ selectedPoiIds: [], selectedAt: "2026-07-03T00:00:00.000Z" })).toThrow();
+  });
+});
+
+describe("StageEventSchema", () => {
+  it("allows awaiting selection status", () => {
+    expect(
+      StageEventSchema.parse({
+        stage: "ground",
+        status: "await-selection",
+        at: "2026-07-03T00:00:00.000Z"
+      }).status
+    ).toBe("await-selection");
   });
 });

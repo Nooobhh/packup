@@ -6,6 +6,9 @@ export type TransportMode = z.infer<typeof TransportModeSchema>;
 export const PaceSchema = z.enum(["packed", "moderate", "relaxed"]);
 export type Pace = z.infer<typeof PaceSchema>;
 
+export const SlotSchema = z.enum(["morning", "afternoon", "evening"]);
+export type Slot = z.infer<typeof SlotSchema>;
+
 export const LngLatSchema = z.object({
   lng: z.number(),
   lat: z.number()
@@ -25,6 +28,8 @@ export const TripInputSchema = z
       .optional(),
     startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     dailyThemes: z.array(z.string().nullable()).optional(),
+    query: z.string().optional(),
+    preferences: z.array(z.string()).optional(),
     transport: TransportModeSchema.default("public"),
     pace: PaceSchema.default("moderate")
   })
@@ -123,7 +128,8 @@ export type FilteredItem = z.infer<typeof FilteredItemSchema>;
 export const TransportToNextSchema = z.object({
   mode: TransportModeSchema.or(z.string()),
   durationMin: z.number().nonnegative(),
-  distanceKm: z.number().nonnegative()
+  distanceKm: z.number().nonnegative(),
+  polyline: z.array(LngLatSchema).optional()
 });
 export type TransportToNext = z.infer<typeof TransportToNextSchema>;
 
@@ -133,7 +139,9 @@ export const PlanItemSchema = z.object({
   poi: GroundedPoiSchema.optional(),
   name: z.string().optional(),
   type: PoiTypeSchema.or(z.string()).optional(),
-  startTime: z.string().regex(/^\d{2}:\d{2}$/),
+  startTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  slot: SlotSchema.optional(),
+  clusterKey: z.string().optional(),
   durationMin: z.number().int().positive(),
   address: z.string().optional(),
   openHours: z.string().optional(),
@@ -190,9 +198,15 @@ export type GroundOutput = z.infer<typeof GroundOutputSchema>;
 export const StageNameSchema = z.enum(["fetch", "extract", "ground", "plan"]);
 export type StageName = z.infer<typeof StageNameSchema>;
 
+export const SelectionSchema = z.object({
+  selectedPoiIds: z.array(z.string()).min(1),
+  selectedAt: z.string()
+});
+export type Selection = z.infer<typeof SelectionSchema>;
+
 export const StageEventSchema = z.object({
   stage: StageNameSchema,
-  status: z.enum(["start", "done", "error"]),
+  status: z.enum(["start", "done", "error", "await-selection"]),
   detail: z.string().optional(),
   at: z.string()
 });

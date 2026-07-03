@@ -1,0 +1,18 @@
+{
+  "destination": "上海",
+  "days": [
+    {
+      "index": 1,
+      "items": [
+        {
+          "name": "外滩",
+          "type": "sight",
+          "startTime": "09:00",
+          "durationMin": 60
+        }
+      ]
+    }
+  ],
+  "filtered": [],
+  "warnings": []
+}
