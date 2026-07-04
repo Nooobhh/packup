@@ -1,5 +1,8 @@
 import type { LLMRunner } from "./types";
 
+const ENDPOINT = "https://api.deepseek.com/chat/completions";
+const DEFAULT_MODEL = "deepseek-v4-flash";
+
 export class DeepseekApiRunner implements LLMRunner {
   private readonly apiKey: string;
   private readonly fetchImpl: typeof fetch;
@@ -11,7 +14,37 @@ export class DeepseekApiRunner implements LLMRunner {
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
 
-  async run(_opts: Parameters<LLMRunner["run"]>[0]): Promise<string> {
-    throw new Error("not implemented");
+  async run(opts: Parameters<LLMRunner["run"]>[0]): Promise<string> {
+    const body: Record<string, unknown> = {
+      model: opts.model ?? DEFAULT_MODEL,
+      messages: buildMessages(opts.prompt, opts.jsonSchema),
+      temperature: 0.2
+    };
+    if (opts.jsonSchema) body.response_format = { type: "json_object" };
+
+    const res = await this.fetchImpl(ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`
+      },
+      body: JSON.stringify(body)
+    });
+    const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    return json.choices?.[0]?.message?.content?.trim() ?? "";
   }
+}
+
+function buildMessages(prompt: string, jsonSchema?: object) {
+  const messages: { role: string; content: string }[] = [];
+  if (jsonSchema) {
+    messages.push({
+      role: "system",
+      content:
+        "输出必须是符合以下 JSON schema 的合法 JSON 对象。只返回 JSON，不要 markdown code fence。\n\n" +
+        JSON.stringify(jsonSchema)
+    });
+  }
+  messages.push({ role: "user", content: prompt });
+  return messages;
 }
