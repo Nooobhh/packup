@@ -1,5 +1,5 @@
-import type { LLMRunner } from "@/lib/llm/types";
 import type { MapProvider } from "@/lib/map/types";
+import { runForStage } from "@/lib/llm/router";
 import { buildPlanPrompt, type PlanPromptPoi, type PlanViolationDetail } from "@/lib/prompts/plan";
 import { BUDGETS } from "./budgets";
 import { backtrackRatio, clusterByDistance, haversineKm } from "./geo";
@@ -25,7 +25,6 @@ export async function runPlan(
   grounded: GroundedPoi[],
   upstreamFiltered: FilteredItem[],
   input: TripInput,
-  llm: LLMRunner,
   map: MapProvider
 ): Promise<TripPlan> {
   const { kept, budgetFiltered } = budgetPois(grounded, input);
@@ -37,7 +36,7 @@ export async function runPlan(
   let warnings: string[] = [];
   let planner: PlannerOutput | undefined;
   try {
-    planner = await callPlanner(context.slimPois, input, llm, context.matrix);
+    planner = await callPlanner(context.slimPois, input, context.matrix);
   } catch {
     warnings.push("LLM 分天失败,已按地理就近自动分配");
   }
@@ -109,8 +108,8 @@ function buildContext(clusterGroups: Map<string, GroundedPoi[]>) {
   return { matrix, slimPois };
 }
 
-async function callPlanner(slimPois: PlanPromptPoi[], input: TripInput, llm: LLMRunner, distanceMatrix: unknown): Promise<PlannerOutput> {
-  const raw = await llm.run({
+async function callPlanner(slimPois: PlanPromptPoi[], input: TripInput, distanceMatrix: unknown): Promise<PlannerOutput> {
+  const raw = await runForStage("plan", {
     prompt: buildPlanPrompt({ slimPois, input, distanceMatrix }),
     jsonSchema: planJsonSchema,
     timeoutMs: BUDGETS.planLlmMs

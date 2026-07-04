@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LLMRunner } from "@/lib/llm/types";
 import type { MapProvider } from "@/lib/map/types";
+import { __resetProvidersForTest } from "@/lib/llm/router";
 import { buildPlanPrompt } from "@/lib/prompts/plan";
 import { backtrackRatio } from "./geo";
 import { nearestClusterOrder, planItemFromPoi, recommendLegTransport, runPlan } from "./plan";
@@ -15,10 +16,13 @@ const input: TripInput = {
 };
 
 describe("runPlan", () => {
+  afterEach(() => __resetProvidersForTest());
+
   it("rehydrates legal slot output by id and emits slot items without startTime", async () => {
     const grounded = [gp("p-a", "外滩", 121.49, 31.24), gp("p-b", "早餐店", 121.5, 31.24, true, "food")];
     const llm = llmWith({ days: [{ theme: "市区", slots: { morning: ["p-a"], afternoon: ["p-b"], evening: [] } }] });
-    const result = await runPlan(grounded, [], input, llm, mapWithRoute(async () => ({ durationMin: 10, distanceKm: 1 })));
+    __resetProvidersForTest({ deepseek: llm, "claude-cli": llm });
+    const result = await runPlan(grounded, [], input, mapWithRoute(async () => ({ durationMin: 10, distanceKm: 1 })));
 
     expect(result.days[0].items[0]).toMatchObject({
       poiId: "p-a",
@@ -34,11 +38,12 @@ describe("runPlan", () => {
 
   it("drops hallucinated ids and warns while preserving valid ids", async () => {
     const grounded = [gp("p-a", "外滩", 121.49, 31.24)];
+    const llm = llmWith({ days: [{ slots: { morning: ["p-a", "made-up"], afternoon: [], evening: [] } }] });
+    __resetProvidersForTest({ deepseek: llm, "claude-cli": llm });
     const result = await runPlan(
       grounded,
       [],
       input,
-      llmWith({ days: [{ slots: { morning: ["p-a", "made-up"], afternoon: [], evening: [] } }] }),
       mapWithRoute(async () => ({ durationMin: 10, distanceKm: 1 }))
     );
 
@@ -49,7 +54,8 @@ describe("runPlan", () => {
   it("falls back after one failed llm call and keeps selected POIs non-empty", async () => {
     const grounded = [gp("p-a", "外滩", 121.49, 31.24), gp("p-b", "豫园", 121.5, 31.23), gp("p-c", "咖啡", 121.51, 31.22)];
     const llm: LLMRunner = { run: vi.fn().mockRejectedValue(new Error("timeout")) };
-    const result = await runPlan(grounded, [], input, llm, mapWithRoute(async () => ({ durationMin: 10, distanceKm: 1 })));
+    __resetProvidersForTest({ deepseek: llm, "claude-cli": llm });
+    const result = await runPlan(grounded, [], input, mapWithRoute(async () => ({ durationMin: 10, distanceKm: 1 })));
 
     expect(llm.run).toHaveBeenCalledTimes(1);
     expect(result.days.flatMap((day) => day.items)).not.toHaveLength(0);
@@ -59,11 +65,12 @@ describe("runPlan", () => {
   it("keeps unverified selected POIs in a non-empty fallback plan", async () => {
     const grounded = [gp("u-a", "笔记小店", 121.49, 31.24, false)];
     grounded[0].location = undefined;
+    const llm = llmWith({ days: [{ slots: { morning: ["u-a"], afternoon: [], evening: [] } }] });
+    __resetProvidersForTest({ deepseek: llm, "claude-cli": llm });
     const result = await runPlan(
       grounded,
       [],
       input,
-      llmWith({ days: [{ slots: { morning: ["u-a"], afternoon: [], evening: [] } }] }),
       mapWithRoute(async () => ({ durationMin: 10, distanceKm: 1 }))
     );
 
@@ -84,11 +91,12 @@ describe("runPlan", () => {
       return { durationMin: 8, distanceKm: 0.5 };
     });
 
+    const llm = llmWith({ days: [{ slots: { morning: ["near-a", "near-b"], afternoon: ["far-c", "far-d"], evening: [] } }] });
+    __resetProvidersForTest({ deepseek: llm, "claude-cli": llm });
     const result = await runPlan(
       grounded,
       [],
       { ...input, days: { base: 1, flex: 0 } },
-      llmWith({ days: [{ slots: { morning: ["near-a", "near-b"], afternoon: ["far-c", "far-d"], evening: [] } }] }),
       { searchPoi: vi.fn(), route }
     );
 
@@ -106,11 +114,12 @@ describe("runPlan", () => {
     ];
     const route = vi.fn(async () => ({ durationMin: 10, distanceKm: 1 }));
 
+    const llm = llmWith({ days: [{ slots: { morning: ["a"], afternoon: ["c"], evening: [] } }] });
+    __resetProvidersForTest({ deepseek: llm, "claude-cli": llm });
     const result = await runPlan(
       grounded,
       [],
       { ...input, days: { base: 1, flex: 0 } },
-      llmWith({ days: [{ slots: { morning: ["a"], afternoon: ["c"], evening: [] } }] }),
       { searchPoi: vi.fn(), route }
     );
 
@@ -130,7 +139,8 @@ describe("runPlan", () => {
       })
     };
 
-    await runPlan(grounded, [], input, llm, { searchPoi: vi.fn(), route });
+    __resetProvidersForTest({ deepseek: llm, "claude-cli": llm });
+    await runPlan(grounded, [], input, { searchPoi: vi.fn(), route });
   });
 
   it("parses suggestedDuration and uses type defaults", async () => {
@@ -139,11 +149,12 @@ describe("runPlan", () => {
       gp("b", "餐厅", 121.02, 31, true, "food")
     ];
 
+    const llm = llmWith({ days: [{ slots: { morning: ["a"], afternoon: ["b"], evening: [] } }] });
+    __resetProvidersForTest({ deepseek: llm, "claude-cli": llm });
     const result = await runPlan(
       grounded,
       [],
       { ...input, days: { base: 1, flex: 0 } },
-      llmWith({ days: [{ slots: { morning: ["a"], afternoon: ["b"], evening: [] } }] }),
       mapWithRoute(async () => ({ durationMin: 10, distanceKm: 1 }))
     );
 
@@ -165,11 +176,11 @@ describe("runPlan", () => {
       })
     };
 
+    __resetProvidersForTest({ deepseek: llm, "claude-cli": llm });
     const result = await runPlan(
       grounded,
       [],
       { ...input, days: { base: 1, flex: 0 }, pace: "moderate" },
-      llm,
       mapWithRoute(async () => ({ durationMin: 5, distanceKm: 1 }))
     );
 
@@ -184,11 +195,12 @@ describe("runPlan", () => {
       { ...gp("d", "D", 2, 0), suggestedDuration: "300分钟" }
     ];
 
+    const llm = llmWith({ days: [{ slots: { morning: ["a", "b"], afternoon: ["c", "d"], evening: [] } }] });
+    __resetProvidersForTest({ deepseek: llm, "claude-cli": llm });
     const result = await runPlan(
       grounded,
       [],
       { ...input, days: { base: 1, flex: 0 } },
-      llmWith({ days: [{ slots: { morning: ["a", "b"], afternoon: ["c", "d"], evening: [] } }] }),
       mapWithRoute(async () => ({ durationMin: 5, distanceKm: 1 }))
     );
     const day = result.days[0];
@@ -211,11 +223,12 @@ describe("runPlan", () => {
       gp("x", "X", 0, 0.0027)
     ];
 
+    const llm = llmWith({ days: [{ slots: { morning: ["a", "x"], afternoon: [], evening: [] } }] });
+    __resetProvidersForTest({ deepseek: llm, "claude-cli": llm });
     const result = await runPlan(
       grounded,
       [],
       { ...input, days: { base: 1, flex: 0 } },
-      llmWith({ days: [{ slots: { morning: ["a", "x"], afternoon: [], evening: [] } }] }),
       mapWithRoute(async () => ({ durationMin: 5, distanceKm: 1 }))
     );
     const names = result.days[0].items.map((item) => item.name);
@@ -317,7 +330,7 @@ function gp(id: string, name: string, lng: number, lat: number, verified = true,
   };
 }
 
-function llmWith(result: unknown): LLMRunner {
+function llmWith(result: unknown): LLMRunner & { run: ReturnType<typeof vi.fn> } {
   return { run: vi.fn().mockResolvedValue(JSON.stringify(result)) };
 }
 
