@@ -1,51 +1,56 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LLMRunner } from "@/lib/llm/types";
+import { __resetProvidersForTest } from "@/lib/llm/router";
 import { BUDGETS } from "./budgets";
 import { parseQuery } from "./parse-query";
 
-function mockLlm(result = "{}"): LLMRunner & { run: ReturnType<typeof vi.fn> } {
-  return { run: vi.fn().mockResolvedValue(result) };
+let mockRun: ReturnType<typeof vi.fn>;
+
+function installMock(result = "{}") {
+  mockRun = vi.fn().mockResolvedValue(result);
+  const mock: LLMRunner = { run: mockRun };
+  __resetProvidersForTest({ deepseek: mock, "claude-cli": mock });
 }
 
+afterEach(() => __resetProvidersForTest());
+
 describe("parseQuery", () => {
+  beforeEach(() => installMock());
+
   it.each([
     ["香港旅游攻略", { destination: "香港", days: undefined, preferences: [] }],
     ["杭州3天旅游攻略", { destination: "杭州", days: 3, preferences: [] }],
     ["泰国3天2晚旅游攻略", { destination: "泰国", days: 3, preferences: [] }],
     ["吉隆坡5天city walk+美食", { destination: "吉隆坡", days: 5, preferences: ["city walk", "美食"] }]
   ])("parses %s by rule without calling llm", async (query, expected) => {
-    const llm = mockLlm();
-
-    await expect(parseQuery(query, llm)).resolves.toEqual(expected);
-    expect(llm.run).not.toHaveBeenCalled();
+    await expect(parseQuery(query)).resolves.toEqual(expected);
+    expect(mockRun).not.toHaveBeenCalled();
   });
 
   it("does not swallow English preferences into the destination", async () => {
-    const llm = mockLlm();
-
-    await expect(parseQuery("Osaka food", llm)).resolves.toEqual({
+    await expect(parseQuery("Osaka food")).resolves.toEqual({
       destination: "Osaka",
       days: undefined,
       preferences: ["food"]
     });
-    expect(llm.run).not.toHaveBeenCalled();
+    expect(mockRun).not.toHaveBeenCalled();
   });
 
   it("uses the llm fallback exactly once when rules cannot identify a destination", async () => {
-    const llm = mockLlm(JSON.stringify({ destination: "京都", days: 4, preferences: ["寺院", "咖啡"] }));
+    installMock(JSON.stringify({ destination: "京都", days: 4, preferences: ["寺院", "咖啡"] }));
 
-    await expect(parseQuery("帮我规划一个超级好玩的假期行程", llm)).resolves.toEqual({
+    await expect(parseQuery("帮我规划一个超级好玩的假期行程")).resolves.toEqual({
       destination: "京都",
       days: 4,
       preferences: ["寺院", "咖啡"]
     });
-    expect(llm.run).toHaveBeenCalledTimes(1);
-    expect(llm.run).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: BUDGETS.parseQueryMs }));
+    expect(mockRun).toHaveBeenCalledTimes(1);
+    expect(mockRun).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: BUDGETS.parseQueryMs, model: "deepseek-v4-flash" }));
   });
 
   it("throws a helpful error when fallback cannot identify a destination", async () => {
-    const llm = mockLlm(JSON.stringify({ destination: "", preferences: [] }));
+    installMock(JSON.stringify({ destination: "", preferences: [] }));
 
-    await expect(parseQuery("帮我规划一个超级好玩的假期行程", llm)).rejects.toThrow("无法识别目的地");
+    await expect(parseQuery("帮我规划一个超级好玩的假期行程")).rejects.toThrow("无法识别目的地");
   });
 });

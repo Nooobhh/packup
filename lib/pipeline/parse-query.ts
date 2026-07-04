@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { LLMRunner } from "@/lib/llm/types";
+import { runForStage } from "@/lib/llm/router";
 import { BUDGETS } from "./budgets";
 
 const ParsedQuerySchema = z.object({
@@ -8,11 +8,11 @@ const ParsedQuerySchema = z.object({
   preferences: z.array(z.string()).default([])
 });
 
-export async function parseQuery(query: string, llm: LLMRunner): Promise<{ destination: string; days?: number; preferences: string[] }> {
+export async function parseQuery(query: string): Promise<{ destination: string; days?: number; preferences: string[] }> {
   const ruled = parseByRules(query);
   if (ruled.destination && ruled.destination.length <= 10) return ruled;
 
-  const raw = await llm.run({
+  const raw = await runForStage("parseQuery", {
     prompt: `从旅行需求中提取目的地、天数和偏好,只返回 JSON。需求: ${query}`,
     jsonSchema: {
       type: "object",
