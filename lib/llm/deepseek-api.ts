@@ -15,6 +15,11 @@ export class DeepseekApiRunner implements LLMRunner {
   }
 
   async run(opts: Parameters<LLMRunner["run"]>[0]): Promise<string> {
+    if (opts.images?.length) {
+      throw new Error(
+        "DeepseekApiRunner 不支持图片输入；该 stage 必须路由到支持多模态的 provider（当前仅 claude-cli）"
+      );
+    }
     const body: Record<string, unknown> = {
       model: opts.model ?? DEFAULT_MODEL,
       messages: buildMessages(opts.prompt, opts.jsonSchema),

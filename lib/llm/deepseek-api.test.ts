@@ -68,3 +68,15 @@ describe("DeepseekApiRunner.run jsonSchema 翻译", () => {
     expect(body.messages[1]).toEqual({ role: "user", content: "输出" });
   });
 });
+
+describe("DeepseekApiRunner.run 图片守卫", () => {
+  it("images 非空时立即 throw 并且不发 fetch", async () => {
+    const fetchImpl = vi.fn();
+    const runner = new DeepseekApiRunner({ apiKey: "sk-test", fetchImpl });
+
+    await expect(
+      runner.run({ prompt: "x", images: ["/a.jpg"], timeoutMs: 1000 })
+    ).rejects.toThrow(/不支持图片/);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
