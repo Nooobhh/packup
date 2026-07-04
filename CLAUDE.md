@@ -26,7 +26,7 @@
 - 画布编辑：结构变换核心前后端共享 `lib/pipeline/plan-edit.ts`，改此处必须双端同源；守恒有测试锁定，不加永久删除 op
 
 ## 集成点
-- LLM = 路由（`lib/llm/router.ts` 内 STAGE_MODELS 表）：parse-query / plan → DeepSeek API（`PACKUP_DEEPSEEK_API_KEY`，模型 `deepseek-v4-flash`）；extract → 本机 `claude -p`（`PACKUP_CLAUDE_MODEL` 覆盖，默认 sonnet）
+- LLM = 路由（`router.ts`）：parse-query / plan → DeepSeek（`PACKUP_DEEPSEEK_API_KEY`）；extract → `claude -p`（`PACKUP_CLAUDE_MODEL`）
 - 地图 = 高德：服务端 REST（`AMAP_REST_KEY`）+ 前端 JS SDK（`NEXT_PUBLIC_AMAP_JS_KEY`），`.env.local` 配置
 - 小红书获取 = 免登录裸 HTTP 主路径（分享链接自带 xsec_token）；`PACKUP_FETCHER=cli` 切 xhs-cli 备选
 
