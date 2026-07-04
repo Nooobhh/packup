@@ -20,9 +20,10 @@
 - 三抽象接口：`lib/fetchers/`（ContentFetcher）、`lib/map/`（MapProvider）、`lib/llm/`（LLMRunner），换实现不动管线
 - 中间产物：`data/trips/<id>/00~40-*.json` + 25-selection.json（选点）+ images/（gitignored，断点续跑依据）
 - 时间预算：超时常量集中 `lib/pipeline/budgets.ts`（正常路径 ≤300s 单测锁死），段超时走部分成功不炸管线
-- UI：`app/page.tsx`（搜索框+链接+手动从零）、`app/trip/[id]/select`（选点页，落选入池）、`app/trip/[id]/`（三栏画布工作台，组件在 `components/workbench/`）
-- API：`app/api/generate`（SSE，首事件带 tripId）+ `POST /api/trips`（手动从零）+ `GET /api/pois/search`（POI 搜索）+ `app/api/trips/[id]` 及其下 candidates/selection/plan（PATCH 编辑 op 集：增删移/排程/交通/偏好）
-- 画布编辑：结构变换核心前后端共享 `lib/pipeline/plan-edit.ts`（改结构编辑必须双端同源，勿在 route/reducer 内重写）；守恒不变量有测试锁定，不加永久删除 op
+- UI：`app/page.tsx`（输入）+ `app/trip/[id]/select`（选点，落选入池）+ `app/trip/[id]/`（工作台，组件 `components/workbench/`）
+- API 生成：`app/api/generate`（SSE）/ `POST /api/trips`（手动）/ `GET /api/pois/search`（POI 搜索）
+- API 行程：`app/api/trips/[id]` 及其下 candidates/selection/plan（PATCH 编辑 op 集：增删移/排程/交通/偏好）
+- 画布编辑：结构变换核心前后端共享 `lib/pipeline/plan-edit.ts`，改此处必须双端同源；守恒有测试锁定，不加永久删除 op
 
 ## 集成点
 - LLM = 本机 `claude -p`（订阅内零 API 费；`PACKUP_CLAUDE_MODEL` 换模型，默认 sonnet）
