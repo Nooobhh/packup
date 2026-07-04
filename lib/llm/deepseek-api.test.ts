@@ -48,3 +48,23 @@ describe("DeepseekApiRunner.run 基本组装", () => {
     expect(body.messages).toEqual([{ role: "user", content: "问一下" }]);
   });
 });
+
+describe("DeepseekApiRunner.run jsonSchema 翻译", () => {
+  it("有 jsonSchema 时请求体带 response_format 且首条 messages 是 system + schema 序列化", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ choices: [{ message: { content: "{}" } }] }), { status: 200 })
+    );
+    const schema = { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } };
+    const runner = new DeepseekApiRunner({ apiKey: "sk-test", fetchImpl });
+
+    await runner.run({ prompt: "输出", jsonSchema: schema, timeoutMs: 1000 });
+
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body as string);
+    expect(body.response_format).toEqual({ type: "json_object" });
+    expect(body.messages).toHaveLength(2);
+    expect(body.messages[0].role).toBe("system");
+    expect(body.messages[0].content).toContain("JSON schema");
+    expect(body.messages[0].content).toContain(JSON.stringify(schema));
+    expect(body.messages[1]).toEqual({ role: "user", content: "输出" });
+  });
+});
