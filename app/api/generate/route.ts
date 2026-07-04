@@ -1,5 +1,4 @@
 import { nanoid } from "nanoid";
-import { runForStage } from "@/lib/llm/router";
 import { parseQuery } from "@/lib/pipeline/parse-query";
 import { createDefaultPipelineDeps, runPipeline } from "@/lib/pipeline/run";
 import { TripInputSchema, type StageEvent, type TripInput } from "@/lib/pipeline/types";
@@ -21,7 +20,7 @@ export async function POST(request: Request) {
   let candidate: Record<string, unknown> = { ...(raw as object), id: body.id ?? nanoid(10) };
   if (body.query && !body.destination) {
     try {
-      const parsedQuery = await parseQuery(body.query, { run: (opts) => runForStage("parseQuery", opts) });
+      const parsedQuery = await parseQuery(body.query);
       candidate = {
         ...candidate,
         query: body.query,
