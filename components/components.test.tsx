@@ -220,6 +220,43 @@ describe("TripWorkbench", () => {
     expect(screen.getByRole("button", { name: "地图 Day 1" })).toBeInTheDocument();
     expect(screen.getByLabelText("显示池点")).toBeInTheDocument();
   });
+
+  it("serializes quick consecutive edits and sends the second patch after the first resolves", async () => {
+    const originalFetch = global.fetch;
+    const initial = workbenchPlan();
+    const afterFirst = {
+      ...initial,
+      days: [{ ...initial.days[0], items: [...initial.days[0].items, initial.pool[0]] }, initial.days[1]],
+      pool: initial.pool.slice(1)
+    };
+    const afterSecond = {
+      ...afterFirst,
+      days: [{ ...afterFirst.days[0], items: [...afterFirst.days[0].items, afterFirst.pool[0]] }, afterFirst.days[1]],
+      pool: afterFirst.pool.slice(1)
+    };
+    let resolveFirst!: (response: { ok: boolean; json: () => Promise<unknown> }) => void;
+    const firstResponse = new Promise<{ ok: boolean; json: () => Promise<unknown> }>((resolve) => {
+      resolveFirst = resolve;
+    });
+    global.fetch = vi
+      .fn()
+      .mockReturnValueOnce(firstResponse)
+      .mockResolvedValueOnce({ ok: true, json: async () => afterSecond }) as typeof fetch;
+    render(<TripWorkbench tripId="trip-1" initialPlan={initial} initialNotes={[]} />);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "加入 Day 1" })[0]);
+    await waitFor(() => expect(screen.getAllByTestId("pool-card")).toHaveLength(2));
+    fireEvent.click(screen.getAllByRole("button", { name: "加入 Day 1" })[0]);
+    await Promise.resolve();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+
+    resolveFirst({ ok: true, json: async () => afterFirst });
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(2));
+    expect(JSON.parse((global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body)).toMatchObject({ op: "add-item", poolItemId: "p1" });
+    expect(JSON.parse((global.fetch as ReturnType<typeof vi.fn>).mock.calls[1][1].body)).toMatchObject({ op: "add-item", poolItemId: "p2" });
+    global.fetch = originalFetch;
+  });
 });
 
 describe("WorkbenchMap and DetailDrawer", () => {

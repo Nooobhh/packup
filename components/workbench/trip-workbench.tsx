@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { closestCenter, DndContext, type DragEndEvent } from "@dnd-kit/core";
 import type { AmapPoi } from "@/lib/map/types";
 import type { GroundedPoi, Note, TransportMode, TripPlan } from "@/lib/pipeline/types";
@@ -14,6 +14,9 @@ type WorkbenchNote = Pick<Note, "id" | "title" | "author" | "url" | "body">;
 
 export function TripWorkbench({ initialPlan, initialNotes, tripId }: { initialPlan: TripPlan; initialNotes: WorkbenchNote[]; tripId: string }) {
   const [plan, setPlan] = useState(initialPlan);
+  const planRef = useRef(initialPlan);
+  const queueRef = useRef<Array<{ intent: WorkbenchIntent; options: { recalcAfterPrefs?: boolean } }>>([]);
+  const processingRef = useRef(false);
   const [notes] = useState(initialNotes);
   const [message, setMessage] = useState("");
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -24,31 +27,54 @@ export function TripWorkbench({ initialPlan, initialNotes, tripId }: { initialPl
   const [showPoolOnMap, setShowPoolOnMap] = useState(true);
   const selectedItem = selectedItemId ? findItem(plan, selectedItemId) : undefined;
 
-  async function execute(intent: WorkbenchIntent, options: { recalcAfterPrefs?: boolean } = {}) {
+  function commitPlan(nextPlan: TripPlan) {
+    planRef.current = nextPlan;
+    setPlan(nextPlan);
+  }
+
+  function execute(intent: WorkbenchIntent, options: { recalcAfterPrefs?: boolean } = {}) {
+    queueRef.current.push({ intent, options });
+    void drainQueue();
+  }
+
+  async function drainQueue() {
+    if (processingRef.current) return;
+    processingRef.current = true;
+    try {
+      while (queueRef.current.length > 0) {
+        const next = queueRef.current.shift()!;
+        await runIntent(next.intent, next.options);
+      }
+    } finally {
+      processingRef.current = false;
+    }
+  }
+
+  async function runIntent(intent: WorkbenchIntent, options: { recalcAfterPrefs?: boolean } = {}) {
     setMessage("");
-    const snapshot = plan;
-    const result = applyIntent(plan, intent);
+    const snapshot = planRef.current;
+    const result = applyIntent(snapshot, intent);
     if ("error" in result) {
       setMessage(result.error);
       return;
     }
-    setPlan(result.optimisticPlan);
+    commitPlan(result.optimisticPlan);
     const response = await fetch(`/api/trips/${tripId}/plan`, { method: "PATCH", body: JSON.stringify(result.patchBody) });
     if (response.ok) {
       const payload = await response.json();
-      setPlan("days" in payload ? payload : payload.plan);
+      commitPlan("days" in payload ? payload : payload.plan);
       if (options.recalcAfterPrefs && window.confirm("立即全程重算交通?")) {
-        await execute({ type: "recalc-transport" });
+        await runIntent({ type: "recalc-transport" });
       }
       return;
     }
-    setPlan(snapshot);
+    commitPlan(snapshot);
     if (response.status === 409) {
       setMessage("行程已更新,正在刷新");
       const fresh = await fetch(`/api/trips/${tripId}`);
       if (fresh.ok) {
         const payload = await fresh.json();
-        setPlan(payload.plan);
+        commitPlan(payload.plan);
       }
     } else {
       setMessage("保存失败,已回滚");
