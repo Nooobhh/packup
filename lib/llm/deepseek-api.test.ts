@@ -80,3 +80,27 @@ describe("DeepseekApiRunner.run 图片守卫", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
+
+describe("DeepseekApiRunner.run model 注入", () => {
+  it("opts.model 存在时使用之", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200 })
+    );
+    const runner = new DeepseekApiRunner({ apiKey: "sk-test", fetchImpl });
+
+    await runner.run({ prompt: "x", model: "deepseek-v4-pro", timeoutMs: 1000 });
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body as string);
+    expect(body.model).toBe("deepseek-v4-pro");
+  });
+
+  it("opts.model 缺省时用 deepseek-v4-flash", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200 })
+    );
+    const runner = new DeepseekApiRunner({ apiKey: "sk-test", fetchImpl });
+
+    await runner.run({ prompt: "x", timeoutMs: 1000 });
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body as string);
+    expect(body.model).toBe("deepseek-v4-flash");
+  });
+});
