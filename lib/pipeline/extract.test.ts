@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import path from "node:path";
 import type { LLMRunner } from "@/lib/llm/types";
+import { __resetProvidersForTest } from "@/lib/llm/router";
 import { buildExtractPrompt } from "@/lib/prompts/extract";
 import { BUDGETS } from "./budgets";
 import { runExtract } from "./extract";
@@ -18,15 +19,24 @@ function note(id: string, images: string[] = [], body = "正文"): Note {
   return { id, url: `manual://${id}`, title: id, body, images, fetchStatus: "ok" };
 }
 
+function installMock(runImpl?: LLMRunner["run"]) {
+  const run = runImpl ? vi.fn(runImpl) : vi.fn();
+  const mock: LLMRunner = { run };
+  __resetProvidersForTest({ deepseek: mock, "claude-cli": mock });
+  return run;
+}
+
+afterEach(() => __resetProvidersForTest());
+
 describe("runExtract", () => {
   it("calls the LLM for text/image and pure-image notes and passes image paths", async () => {
-    const run = vi
-      .fn()
+    const run = installMock();
+    run
       .mockResolvedValueOnce(JSON.stringify({ pois: [poi("外滩", "n1", "text")], filtered: [] }))
       .mockResolvedValueOnce(JSON.stringify({ pois: [poi("武康路", "n2", "image")], filtered: [] }));
 
     const workDir = path.join(process.cwd(), "data/trips/trip-test");
-    const result = await runExtract([note("n1", ["a.jpg"]), note("n2", ["b.jpg"], "")], input, { run }, { workDir });
+    const result = await runExtract([note("n1", ["a.jpg"]), note("n2", ["b.jpg"], "")], input, { workDir });
 
     expect(run).toHaveBeenCalledTimes(2);
     expect(run.mock.calls[0][0].images).toEqual([path.join(workDir, "a.jpg")]);
@@ -37,29 +47,26 @@ describe("runExtract", () => {
   it("caps per-note LLM concurrency at three", async () => {
     let active = 0;
     let maxActive = 0;
-    const llm: LLMRunner = {
-      run: vi.fn(async () => {
-        active++;
-        maxActive = Math.max(maxActive, active);
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        active--;
-        return JSON.stringify({ pois: [], filtered: [] });
-      })
-    };
+    installMock(async () => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active--;
+      return JSON.stringify({ pois: [], filtered: [] });
+    });
 
-    await runExtract([note("a"), note("b"), note("c"), note("d"), note("e")], input, llm);
-
+    await runExtract([note("a"), note("b"), note("c"), note("d"), note("e")], input);
     expect(maxActive).toBeLessThanOrEqual(3);
   });
 
   it("normalizes filtered items to stage extract with sourceNoteId and keeps going after one note fails", async () => {
-    const run = vi
-      .fn()
+    const run = installMock();
+    run
       .mockResolvedValueOnce(JSON.stringify({ pois: [], filtered: [{ name: "广告", reason: "商业内容" }] }))
       .mockRejectedValueOnce(new Error("model down"))
       .mockResolvedValueOnce(JSON.stringify({ pois: [poi("豫园", "n3", "text")], filtered: [] }));
 
-    const result = await runExtract([note("n1"), note("n2"), note("n3")], input, { run });
+    const result = await runExtract([note("n1"), note("n2"), note("n3")], input);
 
     expect(result.filtered[0]).toMatchObject({ name: "广告", sourceNoteId: "n1", stage: "extract", reason: "商业内容" });
     expect(result.failedNotes).toEqual([{ noteId: "n2", reason: "model down" }]);
@@ -67,21 +74,21 @@ describe("runExtract", () => {
   });
 
   it("retries once when LLM output fails zod validation", async () => {
-    const run = vi
-      .fn()
+    const run = installMock();
+    run
       .mockResolvedValueOnce(JSON.stringify({ pois: [{ name: "" }], filtered: [] }))
       .mockResolvedValueOnce(JSON.stringify({ pois: [poi("徐家汇", "n1", "text")], filtered: [] }));
 
-    const result = await runExtract([note("n1")], input, { run });
-
+    const result = await runExtract([note("n1")], input);
     expect(run).toHaveBeenCalledTimes(2);
     expect(run.mock.calls[1][0].prompt).toContain("上次输出未通过校验");
     expect(result.pois[0].name).toBe("徐家汇");
   });
 
   it("skips fetch-failed notes without adding failedNotes", async () => {
+    installMock();
     const failed: Note = { ...note("bad"), fetchStatus: "failed", failReason: "xhs failed" };
-    const result = await runExtract([failed], input, { run: vi.fn() });
+    const result = await runExtract([failed], input);
     expect(result).toEqual({ pois: [], filtered: [], failedNotes: [] });
   });
 
@@ -91,13 +98,12 @@ describe("runExtract", () => {
     (BUDGETS as { extractStageMs: number; extractPerNoteMs: number }).extractStageMs = 10;
     (BUDGETS as { extractStageMs: number; extractPerNoteMs: number }).extractPerNoteMs = 100;
     try {
-      const run = vi.fn((opts: { prompt: string }) => {
+      installMock((opts) => {
         if (opts.prompt.includes("slow")) return new Promise<string>((resolve) => setTimeout(() => resolve(JSON.stringify({ pois: [], filtered: [] })), 50));
         return Promise.resolve(JSON.stringify({ pois: [poi("快点", "fast", "text")], filtered: [] }));
       });
 
-      const result = await runExtract([note("slow"), note("fast")], input, { run });
-
+      const result = await runExtract([note("slow"), note("fast")], input);
       expect(result.pois.map((item) => item.name)).toEqual(["快点"]);
       expect(result.failedNotes).toEqual([expect.objectContaining({ noteId: "slow", reason: expect.stringContaining("超时") })]);
       expect(result.failedNotes[0].reason.length).toBeLessThanOrEqual(200);
@@ -119,12 +125,5 @@ describe("buildExtractPrompt", () => {
 });
 
 function poi(name: string, sourceNoteId: string, sourceType: "text" | "image") {
-  return {
-    name,
-    type: "sight",
-    city: "上海",
-    reason: "笔记说很值得去",
-    sourceNoteId,
-    sourceType
-  };
+  return { name, type: "sight", city: "上海", reason: "笔记说很值得去", sourceNoteId, sourceType };
 }

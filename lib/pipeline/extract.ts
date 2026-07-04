@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { LLMRunner } from "@/lib/llm/types";
+import { runForStage } from "@/lib/llm/router";
 import { buildExtractPrompt } from "@/lib/prompts/extract";
 import { BUDGETS } from "./budgets";
 import type { CandidatePoi, FilteredItem, Note, TripInput } from "./types";
@@ -8,14 +8,13 @@ import { CandidatePoiSchema, FilteredItemSchema } from "./types";
 export async function runExtract(
   notes: Note[],
   input: TripInput,
-  llm: LLMRunner,
   opts: { workDir?: string } = {}
 ): Promise<{ pois: CandidatePoi[]; filtered: FilteredItem[]; failedNotes: { noteId: string; reason: string }[] }> {
   const okNotes = notes.filter((note) => note.fetchStatus === "ok");
   const results = await mapLimitWithDeadline(
     okNotes,
     3,
-    (note) => extractOne(resolveNoteImages(note, opts.workDir), input, llm),
+    (note) => extractOne(resolveNoteImages(note, opts.workDir), input),
     BUDGETS.extractStageMs,
     (note) => ({ pois: [], filtered: [], failed: { noteId: note.id, reason: "提取超时" } })
   );
@@ -34,12 +33,12 @@ function resolveNoteImages(note: Note, workDir?: string): Note {
   };
 }
 
-async function extractOne(note: Note, input: TripInput, llm: LLMRunner) {
+async function extractOne(note: Note, input: TripInput) {
   let validationError: string | undefined;
   for (let attempt = 0; attempt < 2; attempt++) {
     let raw: string;
     try {
-      raw = await llm.run({
+      raw = await runForStage("extract", {
         prompt: buildExtractPrompt(note, input, validationError),
         images: note.images,
         jsonSchema: extractJsonSchema,
