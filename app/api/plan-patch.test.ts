@@ -180,6 +180,40 @@ describe("PATCH /api/trips/[id]/plan canvas ops", () => {
     expect(await readPlan("trip-pool-add")).toEqual(plan);
   });
 
+  it("snaps add-item and move-item insertion indexes out of multi-item cluster interiors", async () => {
+    await writePlan("trip-snap-add", clusteredPlan());
+    setPatchMap(vi.fn().mockResolvedValue({ durationMin: 5, distanceKm: 1 }));
+
+    let initial = multiset(await readPlan("trip-snap-add"));
+    let res = await patch("trip-snap-add", { op: "add-item", day: 1, index: 2, poolItemId: "pool-cluster" });
+    let plan = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(plan.days[0].items.map((entry: Item) => entry.id)).toEqual(["g1", "g2a", "g2b", "pca", "pcb", "x", "y"]);
+    expect(multiset(plan)).toEqual(initial);
+
+    await writePlan("trip-snap-move", clusteredPlan());
+    initial = multiset(await readPlan("trip-snap-move"));
+    res = await patch("trip-snap-move", { op: "move-item", fromDay: 2, toDay: 1, itemId: "d2", toIndex: 2 });
+    plan = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(plan.days[0].items.map((entry: Item) => entry.id)).toEqual(["g1", "g2a", "g2b", "d2", "x", "y"]);
+    expect(multiset(plan)).toEqual(initial);
+  });
+
+  it("uses trip input transport as edit-time fallback when prefs are absent", async () => {
+    await writeInput("trip-input-transport", "drive");
+    await writePlan("trip-input-transport", basePlan());
+    const route = vi.fn().mockResolvedValue({ durationMin: 5, distanceKm: 1 });
+    setPatchMap(route);
+
+    const res = await patch("trip-input-transport", { op: "add-item", day: 1, poolItemId: "pool-1" });
+
+    expect(res.status).toBe(200);
+    expect(route).toHaveBeenCalledWith(expect.anything(), expect.anything(), "drive");
+  });
+
   it("rejects bad boundaries without writing and keeps 409 protection for new ops", async () => {
     await writePlan("trip-bad", basePlan());
     setPatchMap(vi.fn().mockResolvedValue({ durationMin: 5, distanceKm: 1 }));
@@ -315,6 +349,11 @@ function groundedPoi(id: string, name: string, lng: number) {
 async function writePlan(id: string, plan: unknown) {
   await mkdir(path.join(dataRoot, id), { recursive: true });
   await writeFile(planFile(id), JSON.stringify(plan, null, 2), "utf8");
+}
+
+async function writeInput(id: string, transport: string) {
+  await mkdir(path.join(dataRoot, id), { recursive: true });
+  await writeFile(path.join(dataRoot, id, "00-input.json"), JSON.stringify({ id, links: [], destination: "上海", transport, pace: "moderate" }), "utf8");
 }
 
 async function readPlan(id: string) {

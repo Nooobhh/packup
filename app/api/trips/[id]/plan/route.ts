@@ -6,6 +6,20 @@ import type { MapProvider } from "@/lib/map/types";
 import { BUDGETS } from "@/lib/pipeline/budgets";
 import { nearestClusterOrder, planItemFromPoi, recommendLegTransport } from "@/lib/pipeline/plan";
 import {
+  addEmptyDay,
+  addItemToDay,
+  appendItemsToPool,
+  dayAt,
+  findGroup,
+  moveDayGroupToDay,
+  moveDayGroupToPool,
+  movePoolGroupToDay,
+  planItemKey,
+  removeDayToPool,
+  reorderItemsByGroupIds,
+  setDayTheme
+} from "@/lib/pipeline/plan-edit";
+import {
   GroundedPoiSchema,
   TransportModeSchema,
   TransportPrefsSchema,
@@ -73,32 +87,33 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   const plan = TripPlanSchema.parse(JSON.parse(originalRaw));
   await (globalThis as typeof globalThis & { __packupPatchAfterReadForTest?: (file: string) => Promise<void> | void }).__packupPatchAfterReadForTest?.(file);
   const map = getMap();
+  const fallbackTransport = await readInputTransport(id);
 
   try {
     switch (patch.data.op) {
       case "reorder":
-        await applyReorder(dayAt(plan, patch.data.day).items, patch.data.orderedIds, map, plan.transportPrefs);
+        await applyReorder(dayAt(plan, patch.data.day).items, patch.data.orderedIds, map, plan.transportPrefs, fallbackTransport);
         break;
       case "set-transport":
         await applySetTransport(dayAt(plan, patch.data.day).items, patch.data.segmentIndex, patch.data.mode, map);
         break;
       case "add-item":
-        await applyAddItem(plan, patch.data, map);
+        await applyAddItem(plan, patch.data, map, fallbackTransport);
         break;
       case "pool-add":
         applyPoolAdd(plan, patch.data.poi);
         break;
       case "remove-item":
-        await applyRemoveItem(plan, patch.data.day, patch.data.itemId, map);
+        await applyRemoveItem(plan, patch.data.day, patch.data.itemId, map, fallbackTransport);
         break;
       case "move-item":
-        await applyMoveItem(plan, patch.data.fromDay, patch.data.toDay, patch.data.itemId, patch.data.toIndex, map);
+        await applyMoveItem(plan, patch.data.fromDay, patch.data.toDay, patch.data.itemId, patch.data.toIndex, map, fallbackTransport);
         break;
       case "update-item":
         applyUpdateItem(plan, patch.data.day, patch.data.itemId, patch.data.set);
         break;
       case "add-day":
-        plan.days.push({ index: plan.days.length + 1, theme: patch.data.theme, items: [] });
+        addEmptyDay(plan, patch.data.theme);
         break;
       case "remove-day":
         applyRemoveDay(plan, patch.data.day);
@@ -107,7 +122,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         applySetDayTheme(plan, patch.data.day, patch.data.theme);
         break;
       case "optimize-day":
-        await applyOptimizeDay(plan, patch.data.day, map);
+        await applyOptimizeDay(plan, patch.data.day, map, fallbackTransport);
         break;
       case "set-transport-prefs":
         plan.transportPrefs = TransportPrefsSchema.parse({
@@ -117,7 +132,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         });
         break;
       case "recalc-transport":
-        await applyRecalcTransport(plan, patch.data.day, map);
+        await applyRecalcTransport(plan, patch.data.day, map, fallbackTransport);
         break;
     }
   } catch (error) {
@@ -134,37 +149,34 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 
 function applyPoolAdd(plan: TripPlan, poi: z.infer<typeof GroundedPoiSchema>) {
   const item = planItemFromPoi(poi, "morning", poi.id ?? poi.amapId ?? poi.name);
-  clearForPool([item]);
-  plan.pool.push(item);
+  appendItemsToPool(plan, [item]);
 }
 
 async function applyAddItem(
   plan: TripPlan,
   patch: { day: number; index?: number; poolItemId?: string; poi?: z.infer<typeof GroundedPoiSchema> },
-  map: Pick<MapProvider, "route">
+  map: Pick<MapProvider, "route">,
+  fallbackTransport: TransportMode
 ) {
   if (Boolean(patch.poolItemId) === Boolean(patch.poi)) throw new Error("poolItemId 或 poi 必须且只能提供一个");
-  const day = dayAt(plan, patch.day);
-  const index = insertionIndex(day.items, patch.index);
-  const group = patch.poolItemId
-    ? takeGroup(plan.pool, patch.poolItemId)
-    : [
+  const result = patch.poolItemId
+    ? movePoolGroupToDay(plan, patch.poolItemId, patch.day, patch.index)
+    : addItemToDay(
+        plan,
         planItemFromPoi(
           patch.poi!,
           "morning",
           patch.poi!.id ?? patch.poi!.amapId ?? patch.poi!.name
-        )
-      ];
-  day.items.splice(index, 0, ...group);
-  await recomputeInsertion(day, index, group.length, map, plan.transportPrefs);
+        ),
+        patch.day,
+        patch.index
+      );
+  await recomputeInsertion(result.day, result.index, result.group.length, map, plan.transportPrefs, fallbackTransport);
 }
 
-async function applyRemoveItem(plan: TripPlan, dayNumber: number, itemIdToRemove: string, map: Pick<MapProvider, "route">) {
-  const day = dayAt(plan, dayNumber);
-  const { group, index } = takeGroupWithIndex(day.items, itemIdToRemove);
-  clearForPool(group);
-  plan.pool.push(...group);
-  await recomputeRemoval(day, index, map, plan.transportPrefs);
+async function applyRemoveItem(plan: TripPlan, dayNumber: number, itemIdToRemove: string, map: Pick<MapProvider, "route">, fallbackTransport: TransportMode) {
+  const { day, index } = moveDayGroupToPool(plan, dayNumber, itemIdToRemove);
+  await recomputeRemoval(day, index, map, plan.transportPrefs, fallbackTransport);
 }
 
 async function applyMoveItem(
@@ -173,15 +185,12 @@ async function applyMoveItem(
   toDayNumber: number,
   itemIdToMove: string,
   toIndex: number | undefined,
-  map: Pick<MapProvider, "route">
+  map: Pick<MapProvider, "route">,
+  fallbackTransport: TransportMode
 ) {
-  const fromDay = dayAt(plan, fromDayNumber);
-  const { group, index } = takeGroupWithIndex(fromDay.items, itemIdToMove);
-  await recomputeRemoval(fromDay, index, map, plan.transportPrefs);
-  const toDay = dayAt(plan, toDayNumber);
-  const indexInTarget = insertionIndex(toDay.items, toIndex);
-  toDay.items.splice(indexInTarget, 0, ...group);
-  await recomputeInsertion(toDay, indexInTarget, group.length, map, plan.transportPrefs);
+  const { fromDay, toDay, group, fromIndex, index } = moveDayGroupToDay(plan, fromDayNumber, toDayNumber, itemIdToMove, toIndex);
+  await recomputeRemoval(fromDay, fromIndex, map, plan.transportPrefs, fallbackTransport);
+  await recomputeInsertion(toDay, index, group.length, map, plan.transportPrefs, fallbackTransport);
 }
 
 function applyUpdateItem(plan: TripPlan, dayNumber: number, target: string, set: { note?: string; startTime?: string; durationMin?: number }) {
@@ -193,31 +202,22 @@ function applyUpdateItem(plan: TripPlan, dayNumber: number, target: string, set:
 }
 
 function applyRemoveDay(plan: TripPlan, dayNumber: number) {
-  if (plan.days.length <= 1) throw new Error("至少保留一天");
-  const index = dayNumber - 1;
-  const [removed] = plan.days.splice(index, 1);
-  if (!removed) throw new Error("day 越界");
-  const items = [...removed.items];
-  clearForPool(items);
-  plan.pool.push(...items);
-  reindexDays(plan.days);
+  removeDayToPool(plan, dayNumber);
 }
 
 function applySetDayTheme(plan: TripPlan, dayNumber: number, theme: string) {
-  const day = dayAt(plan, dayNumber);
-  if (theme.trim() === "") delete day.theme;
-  else day.theme = theme;
+  setDayTheme(plan, dayNumber, theme);
 }
 
-async function applyOptimizeDay(plan: TripPlan, dayNumber: number, map: Pick<MapProvider, "route">) {
+async function applyOptimizeDay(plan: TripPlan, dayNumber: number, map: Pick<MapProvider, "route">, fallbackTransport: TransportMode) {
   const day = dayAt(plan, dayNumber);
   const oldPair = adjacentPairMap(day.items);
   const reordered = nearestClusterOrder(day.items).flatMap((group) => group.items);
   day.items.splice(0, day.items.length, ...reordered);
-  await fillDayWithPairReuse(day, oldPair, map, plan.transportPrefs);
+  await fillDayWithPairReuse(day, oldPair, map, plan.transportPrefs, fallbackTransport);
 }
 
-async function applyRecalcTransport(plan: TripPlan, dayNumber: number | undefined, map: Pick<MapProvider, "route">) {
+async function applyRecalcTransport(plan: TripPlan, dayNumber: number | undefined, map: Pick<MapProvider, "route">, fallbackTransport: TransportMode) {
   const days = dayNumber ? [dayAt(plan, dayNumber)] : plan.days;
   const deadline = Date.now() + BUDGETS.planRoutesMs;
   let timedOut = false;
@@ -228,7 +228,7 @@ async function applyRecalcTransport(plan: TripPlan, dayNumber: number | undefine
         break;
       }
       day.items[i].transportToNext = undefined;
-      await recommendAt(day, i, map, plan.transportPrefs, deadline);
+      await recommendAt(day, i, map, plan.transportPrefs, deadline, fallbackTransport);
     }
     if (day.items.length > 0) day.items.at(-1)!.transportToNext = undefined;
     if (timedOut) break;
@@ -236,15 +236,10 @@ async function applyRecalcTransport(plan: TripPlan, dayNumber: number | undefine
   if (timedOut) plan.warnings.push("交通重算超时,剩余路段保留原值");
 }
 
-async function applyReorder(items: PlanItem[], orderedIds: string[], map: Pick<MapProvider, "route">, prefs?: TransportPrefs) {
-  const groups = groupItems(items);
-  const byId = new Map(groups.map((group) => [group.id, group.items]));
-  if (!sameMembers(orderedIds, Array.from(byId.keys()))) throw new Error("orderedIds 与当天 items 集合不一致");
-
+async function applyReorder(items: PlanItem[], orderedIds: string[], map: Pick<MapProvider, "route">, prefs?: TransportPrefs, fallbackTransport: TransportMode = "public") {
   const oldPair = adjacentPairMap(items);
-  const reordered = orderedIds.flatMap((id) => byId.get(id)!);
-  items.splice(0, items.length, ...reordered);
-  await fillDayWithPairReuse({ items }, oldPair, map, prefs);
+  reorderItemsByGroupIds(items, orderedIds);
+  await fillDayWithPairReuse({ items }, oldPair, map, prefs, fallbackTransport);
 }
 
 async function applySetTransport(items: PlanItem[], index: number, mode: TransportMode, map: Pick<MapProvider, "route">) {
@@ -256,33 +251,46 @@ async function applySetTransport(items: PlanItem[], index: number, mode: Transpo
   items[index].transportToNext = { ...route, mode };
 }
 
-async function fillDayWithPairReuse(day: Pick<PlanDay, "items">, oldPair: Map<string, PlanItem["transportToNext"]>, map: Pick<MapProvider, "route">, prefs?: TransportPrefs) {
+async function fillDayWithPairReuse(
+  day: Pick<PlanDay, "items">,
+  oldPair: Map<string, PlanItem["transportToNext"]>,
+  map: Pick<MapProvider, "route">,
+  prefs?: TransportPrefs,
+  fallbackTransport: TransportMode = "public"
+) {
   for (let i = 0; i < day.items.length; i++) day.items[i].transportToNext = undefined;
   for (let i = 0; i < day.items.length - 1; i++) {
     const key = pairKey(day.items[i], day.items[i + 1]);
     if (oldPair.has(key)) day.items[i].transportToNext = oldPair.get(key);
-    else await recommendAt(day, i, map, prefs);
+    else await recommendAt(day, i, map, prefs, Number.POSITIVE_INFINITY, fallbackTransport);
   }
 }
 
-async function recomputeInsertion(day: PlanDay, index: number, groupLength: number, map: Pick<MapProvider, "route">, prefs?: TransportPrefs) {
-  if (index > 0) await recommendAt(day, index - 1, map, prefs);
-  await recommendAt(day, index + groupLength - 1, map, prefs);
+async function recomputeInsertion(day: PlanDay, index: number, groupLength: number, map: Pick<MapProvider, "route">, prefs: TransportPrefs | undefined, fallbackTransport: TransportMode) {
+  if (index > 0) await recommendAt(day, index - 1, map, prefs, Number.POSITIVE_INFINITY, fallbackTransport);
+  await recommendAt(day, index + groupLength - 1, map, prefs, Number.POSITIVE_INFINITY, fallbackTransport);
 }
 
-async function recomputeRemoval(day: PlanDay, removedIndex: number, map: Pick<MapProvider, "route">, prefs?: TransportPrefs) {
-  if (removedIndex > 0) await recommendAt(day, removedIndex - 1, map, prefs);
+async function recomputeRemoval(day: PlanDay, removedIndex: number, map: Pick<MapProvider, "route">, prefs: TransportPrefs | undefined, fallbackTransport: TransportMode) {
+  if (removedIndex > 0) await recommendAt(day, removedIndex - 1, map, prefs, Number.POSITIVE_INFINITY, fallbackTransport);
   if (day.items.length > 0) day.items.at(-1)!.transportToNext = undefined;
 }
 
-async function recommendAt(day: Pick<PlanDay, "items">, index: number, map: Pick<MapProvider, "route">, prefs?: TransportPrefs, deadline = Number.POSITIVE_INFINITY) {
+async function recommendAt(
+  day: Pick<PlanDay, "items">,
+  index: number,
+  map: Pick<MapProvider, "route">,
+  prefs?: TransportPrefs,
+  deadline = Number.POSITIVE_INFINITY,
+  fallbackTransport: TransportMode = "public"
+) {
   if (index < 0 || index >= day.items.length - 1) {
     if (day.items[index]) day.items[index].transportToNext = undefined;
     return;
   }
   day.items[index].transportToNext = undefined;
   try {
-    const route = await recommendLegTransport(day.items[index], day.items[index + 1], { transport: "public" }, map, deadline, prefs);
+    const route = await recommendLegTransport(day.items[index], day.items[index + 1], { transport: fallbackTransport }, map, deadline, prefs);
     if (route) day.items[index].transportToNext = route;
   } catch {
     day.items[index].transportToNext = undefined;
@@ -296,81 +304,7 @@ function adjacentPairMap(items: PlanItem[]) {
 }
 
 function pairKey(from: PlanItem, to: PlanItem) {
-  return `${itemId(from)}->${itemId(to)}`;
-}
-
-function dayAt(plan: TripPlan, dayNumber: number) {
-  const day = plan.days[dayNumber - 1];
-  if (!day) throw new Error("day 越界");
-  return day;
-}
-
-function insertionIndex(items: PlanItem[], index: number | undefined) {
-  const resolved = index ?? items.length;
-  if (resolved < 0 || resolved > items.length) throw new Error("index 越界");
-  return resolved;
-}
-
-function takeGroup(items: PlanItem[], target: string) {
-  return takeGroupWithIndex(items, target).group;
-}
-
-function takeGroupWithIndex(items: PlanItem[], target: string) {
-  const group = findGroup(items, target);
-  if (!group) throw new Error("itemId 不存在");
-  const removedGroup = items.splice(group.index, group.items.length);
-  return { group: removedGroup, index: group.index };
-}
-
-function findGroup(items: PlanItem[], target: string) {
-  const groups = groupItems(items);
-  let index = 0;
-  for (const group of groups) {
-    if (group.id === target || group.items.some((item) => rawItemId(item) === target)) return { ...group, index };
-    index += group.items.length;
-  }
-  return undefined;
-}
-
-function clearForPool(items: PlanItem[]) {
-  for (const item of items) {
-    delete item.slot;
-    delete item.transportToNext;
-  }
-}
-
-function reindexDays(days: PlanDay[]) {
-  days.forEach((day, index) => {
-    day.index = index + 1;
-  });
-}
-
-function groupItems(items: PlanItem[]) {
-  const groups: Array<{ id: string; items: PlanItem[] }> = [];
-  for (const item of items) {
-    const id = item.clusterKey ?? itemId(item);
-    const last = groups.at(-1);
-    if (last?.id === id) last.items.push(item);
-    else groups.push({ id, items: [item] });
-  }
-  const seen = new Set<string>();
-  for (const group of groups) {
-    if (seen.has(group.id)) throw new Error("同一 clusterKey 存在非相邻分段,请先重新生成行程");
-    seen.add(group.id);
-  }
-  return groups;
-}
-
-function sameMembers(a: string[], b: string[]) {
-  return a.length === b.length && a.every((id) => b.includes(id)) && b.every((id) => a.includes(id));
-}
-
-function itemId(item: PlanItem) {
-  return item.clusterKey ?? item.poiId ?? item.id ?? item.name ?? "";
-}
-
-function rawItemId(item: PlanItem) {
-  return item.poiId ?? item.id ?? item.name ?? "";
+  return `${planItemKey(from)}->${planItemKey(to)}`;
 }
 
 function itemLocation(item: PlanItem): LngLat | undefined {
@@ -379,6 +313,17 @@ function itemLocation(item: PlanItem): LngLat | undefined {
 
 function getMap(): Pick<MapProvider, "route"> {
   return ((globalThis as typeof globalThis & { __packupPatchMapForTest?: Pick<MapProvider, "route"> }).__packupPatchMapForTest ?? new AmapRestProvider()) as Pick<MapProvider, "route">;
+}
+
+async function readInputTransport(id: string): Promise<TransportMode> {
+  try {
+    const raw = await readFile(path.join(tripDir(id), "00-input.json"), "utf8");
+    const parsed = JSON.parse(raw) as { transport?: unknown };
+    const transport = TransportModeSchema.safeParse(parsed.transport);
+    return transport.success ? transport.data : "public";
+  } catch {
+    return "public";
+  }
 }
 
 function tripDir(id: string) {
