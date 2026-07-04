@@ -54,6 +54,15 @@ export function CandidateList({ tripId, grounded, filtered }: { tripId: string; 
     }
   }
 
+  if (grounded.length === 0) {
+    return (
+      <div className="space-y-4 rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm">
+        <p className="font-medium text-destructive">没有可选地点</p>
+        <p className="text-muted-foreground">所有笔记都没能解析出候选地点,通常是:小红书链接失效/需要登录,或本机 <code>claude</code> CLI 处理时报错。可以回首页换几条链接重试;要看具体原因,查看行程页顶部的「失败链接」提示,或读 <code>data/trips/{tripId}/</code> 目录下的 <code>*.error.json</code> 与 <code>20-pois.json</code>。</p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5">
       <section className="space-y-3">
