@@ -39,3 +39,21 @@ describe("runForStage 分发", () => {
     expect(ds.run).not.toHaveBeenCalled();
   });
 });
+
+describe("runForStage 单例复用", () => {
+  it("对同一 provider 的多次调用复用同一实例", async () => {
+    const ds = fakeRunner();
+    __resetProvidersForTest({ deepseek: ds, "claude-cli": fakeRunner() });
+
+    await runForStage("parseQuery", { prompt: "a", timeoutMs: 1 });
+    await runForStage("plan", { prompt: "b", timeoutMs: 1 });
+    expect(ds.run).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("__resetProvidersForTest", () => {
+  it("不带参调用清空所有实例", () => {
+    __resetProvidersForTest({ deepseek: fakeRunner() });
+    expect(() => __resetProvidersForTest()).not.toThrow();
+  });
+});
