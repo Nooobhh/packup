@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { __resetProvidersForTest } from "@/lib/llm/router";
 import { POST } from "./generate/route";
 import { GET } from "./trips/[id]/route";
 import { GET as GET_CANDIDATES } from "./trips/[id]/candidates/route";
@@ -17,10 +18,17 @@ const oldEnv = process.env.PACKUP_DATA_DIR;
 beforeEach(async () => {
   dataRoot = await mkdtemp(path.join(os.tmpdir(), "api-"));
   process.env.PACKUP_DATA_DIR = dataRoot;
+
+  const mockRun = vi
+    .fn()
+    .mockResolvedValueOnce(JSON.stringify({ destination: "杭州", days: 3, preferences: [] }))
+    .mockResolvedValue(JSON.stringify({ pois: [], filtered: [] }));
+  __resetProvidersForTest({ deepseek: { run: mockRun }, "claude-cli": { run: mockRun } });
 });
 
 afterEach(async () => {
   process.env.PACKUP_DATA_DIR = oldEnv;
+  __resetProvidersForTest();
   (globalThis as typeof globalThis & { __packupGeneratePipelineForTest?: unknown }).__packupGeneratePipelineForTest = undefined;
   (globalThis as typeof globalThis & { __packupPatchMapForTest?: unknown }).__packupPatchMapForTest = undefined;
   (globalThis as typeof globalThis & { __packupPatchAfterReadForTest?: unknown }).__packupPatchAfterReadForTest = undefined;
@@ -77,6 +85,8 @@ describe("POST /api/generate", () => {
   });
 
   it("returns 400 when query cannot be parsed", async () => {
+    const failRun = vi.fn().mockRejectedValue(new Error("无法识别目的地"));
+    __resetProvidersForTest({ deepseek: { run: failRun }, "claude-cli": { run: failRun } });
     const res = await POST(new Request("http://test/api/generate", { method: "POST", body: JSON.stringify({ query: "帮我规划一个超级好玩的假期行程", links: ["u"] }) }));
     expect(res.status).toBe(400);
     expect(await res.text()).toContain("无法识别目的地");

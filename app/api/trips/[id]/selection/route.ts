@@ -57,7 +57,6 @@ async function readInput(id: string, dir: string): Promise<TripInput> {
 function testDeps() {
   return {
     fetcher: { fetch: async () => [] },
-    llm: { run: async () => "" },
     map: { searchPoi: async () => null, route: async () => ({ durationMin: 0, distanceKm: 0 }) }
   };
 }

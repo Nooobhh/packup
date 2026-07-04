@@ -1,5 +1,5 @@
 import { nanoid } from "nanoid";
-import { ClaudeCliRunner } from "@/lib/llm/claude-cli";
+import { runForStage } from "@/lib/llm/router";
 import { parseQuery } from "@/lib/pipeline/parse-query";
 import { createDefaultPipelineDeps, runPipeline } from "@/lib/pipeline/run";
 import { TripInputSchema, type StageEvent, type TripInput } from "@/lib/pipeline/types";
@@ -21,8 +21,7 @@ export async function POST(request: Request) {
   let candidate: Record<string, unknown> = { ...(raw as object), id: body.id ?? nanoid(10) };
   if (body.query && !body.destination) {
     try {
-      const testMode = Boolean((globalThis as typeof globalThis & { __packupGeneratePipelineForTest?: PipelineFn }).__packupGeneratePipelineForTest) || Boolean(process.env.VITEST);
-      const parsedQuery = await parseQuery(body.query, testMode ? testDeps().llm : new ClaudeCliRunner());
+      const parsedQuery = await parseQuery(body.query, { run: (opts) => runForStage("parseQuery", opts) });
       candidate = {
         ...candidate,
         query: body.query,
@@ -75,7 +74,6 @@ export async function POST(request: Request) {
 function testDeps() {
   return {
     fetcher: { fetch: async () => [] },
-    llm: { run: async () => "" },
     map: { searchPoi: async () => null, searchPois: async () => [], route: async () => ({ durationMin: 0, distanceKm: 0 }) }
   };
 }
