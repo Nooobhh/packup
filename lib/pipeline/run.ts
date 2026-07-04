@@ -6,8 +6,6 @@ import { ManualFetcher } from "@/lib/fetchers/manual";
 import type { ContentFetcher } from "@/lib/fetchers/types";
 import { XhsCliFetcher } from "@/lib/fetchers/xhs-cli";
 import { XhsHttpFetcher } from "@/lib/fetchers/xhs-http";
-import { ClaudeCliRunner } from "@/lib/llm/claude-cli";
-import type { LLMRunner } from "@/lib/llm/types";
 import { AmapRestProvider } from "@/lib/map/amap-rest";
 import type { MapProvider } from "@/lib/map/types";
 import { runExtract } from "./extract";
@@ -40,7 +38,7 @@ const outputFiles: Record<StageName, string> = {
 
 export async function runPipeline(
   input: TripInput,
-  deps: { fetcher: ContentFetcher; llm: LLMRunner; map: MapProvider },
+  deps: { fetcher: ContentFetcher; map: MapProvider },
   opts: { onEvent?: (e: StageEvent) => void; force?: boolean; fromStage?: StageName; toStage?: StageName } = {}
 ): Promise<{ tripId: string }> {
   const parsedInput = TripInputSchema.parse(input);
@@ -57,9 +55,9 @@ export async function runPipeline(
     try {
       emit(opts.onEvent, stage, "start");
       if (stage === "fetch") await runFetch(parsedInput, deps.fetcher, workDir);
-      if (stage === "extract") await runExtractStage(parsedInput, deps.llm, workDir);
+      if (stage === "extract") await runExtractStage(parsedInput, workDir);
       if (stage === "ground") await runGroundStage(parsedInput, deps.map, workDir);
-      if (stage === "plan") await runPlanStage(parsedInput, deps.llm, deps.map, workDir);
+      if (stage === "plan") await runPlanStage(parsedInput, deps.map, workDir);
       emit(opts.onEvent, stage, "done");
       if (opts.toStage === stage) break;
     } catch (error) {
@@ -77,13 +75,12 @@ export async function runPipeline(
   return { tripId };
 }
 
-export function createDefaultPipelineDeps(workDir?: string, input?: TripInput): { fetcher: ContentFetcher; llm: LLMRunner; map: MapProvider } {
+export function createDefaultPipelineDeps(workDir?: string, input?: TripInput): { fetcher: ContentFetcher; map: MapProvider } {
   const manualDir = workDir ? path.join(workDir, "manual") : "";
   const useManual = Boolean(workDir && input && input.links.length === 0 && existsSyncish(manualDir));
   const fetcher = process.env.PACKUP_FETCHER === "cli" ? new XhsCliFetcher() : new XhsHttpFetcher();
   return {
     fetcher: useManual ? new ManualFetcher() : fetcher,
-    llm: new ClaudeCliRunner(),
     map: new AmapRestProvider()
   };
 }
@@ -117,9 +114,9 @@ async function runFetch(input: TripInput, fetcher: ContentFetcher, workDir: stri
   await writeJson(path.join(workDir, outputFiles.fetch), NoteSchema.array().parse(notes));
 }
 
-async function runExtractStage(input: TripInput, llm: LLMRunner, workDir: string) {
+async function runExtractStage(input: TripInput, workDir: string) {
   const notes = NoteSchema.array().parse(await readJson(path.join(workDir, outputFiles.fetch)));
-  const output = await runExtract(notes, input, llm, { workDir });
+  const output = await runExtract(notes, input, { workDir });
   await writeJson(path.join(workDir, outputFiles.extract), ExtractOutputSchema.parse(output));
 }
 
@@ -132,7 +129,7 @@ async function runGroundStage(input: TripInput, map: MapProvider, workDir: strin
   );
 }
 
-async function runPlanStage(input: TripInput, llm: LLMRunner, map: MapProvider, workDir: string) {
+async function runPlanStage(input: TripInput, map: MapProvider, workDir: string) {
   const ground = GroundOutputSchema.parse(await readJson(path.join(workDir, outputFiles.ground)));
   const selectionFile = path.join(workDir, "25-selection.json");
   let selectedGrounded = ground.grounded;
@@ -159,7 +156,7 @@ async function runPlanStage(input: TripInput, llm: LLMRunner, map: MapProvider, 
         )
     ];
   }
-  const plan = await runPlan(selectedGrounded, filtered, input, llm, map);
+  const plan = await runPlan(selectedGrounded, filtered, input, map);
   plan.pool = poolPois.map((poi) => {
     const item = planItemFromPoi(poi, "morning", poi.id ?? poi.amapId ?? poi.name);
     delete item.slot;

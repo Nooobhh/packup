@@ -6,6 +6,7 @@ import { XhsCliFetcher } from "@/lib/fetchers/xhs-cli";
 import { XhsHttpFetcher } from "@/lib/fetchers/xhs-http";
 import type { ContentFetcher } from "@/lib/fetchers/types";
 import type { LLMRunner } from "@/lib/llm/types";
+import { __resetProvidersForTest } from "@/lib/llm/router";
 import type { MapProvider } from "@/lib/map/types";
 import { GroundOutputSchema, NoteSchema, TripPlanSchema, type StageEvent, type TripInput } from "./types";
 import { createDefaultPipelineDeps, runPipeline } from "./run";
@@ -18,12 +19,22 @@ const oldFetcher = process.env.PACKUP_FETCHER;
 beforeEach(async () => {
   dataRoot = await mkdtemp(path.join(os.tmpdir(), "pipeline-run-"));
   process.env.PACKUP_DATA_DIR = dataRoot;
+
+  const mockRun = vi
+    .fn()
+    .mockResolvedValueOnce(
+      JSON.stringify({ pois: [{ name: "外滩", type: "sight", reason: "好看", sourceNoteId: "note1", sourceType: "text" }], filtered: [] })
+    )
+    .mockResolvedValue(JSON.stringify({ days: [{ index: 1, items: [planItem()] }], filtered: [], warnings: [] }));
+  __resetProvidersForTest({ deepseek: { run: mockRun }, "claude-cli": { run: mockRun } });
+  (globalThis as unknown as { __packupTestLlmRun: typeof mockRun }).__packupTestLlmRun = mockRun;
 });
 
 afterEach(async () => {
   process.env.PACKUP_DATA_DIR = oldEnv;
   process.env.AMAP_REST_KEY = oldAmapKey;
   process.env.PACKUP_FETCHER = oldFetcher;
+  __resetProvidersForTest();
   await rm(dataRoot, { recursive: true, force: true });
 });
 
@@ -81,18 +92,20 @@ describe("runPipeline", () => {
     await writeFile(path.join(dir, "00-input.json"), JSON.stringify(input), "utf8");
     await writeFile(path.join(dir, "30-grounded.json"), JSON.stringify({ grounded: [grounded()], filtered: [] }), "utf8");
     const deps = depsForSuccess();
-    deps.llm.run = vi.fn().mockResolvedValue(JSON.stringify({ days: [{ index: 1, items: [planItem()] }], filtered: [], warnings: [] }));
+    const planRun = vi.fn().mockResolvedValue(JSON.stringify({ days: [{ index: 1, items: [planItem()] }], filtered: [], warnings: [] }));
+    __resetProvidersForTest({ deepseek: { run: planRun }, "claude-cli": { run: planRun } });
 
     await runPipeline(input, deps);
 
     expect(deps.fetcher.fetch).not.toHaveBeenCalled();
-    expect(deps.llm.run).toHaveBeenCalledTimes(1);
+    expect(planRun).toHaveBeenCalledTimes(1);
     await expect(readFile(path.join(dir, "40-plan.json"), "utf8")).resolves.toContain("外滩");
   });
 
   it("stops after toStage ground without running plan", async () => {
     const events: StageEvent[] = [];
     const deps = depsForSuccess();
+    const mockRun = (globalThis as unknown as { __packupTestLlmRun: ReturnType<typeof vi.fn> }).__packupTestLlmRun;
 
     await runPipeline(input, deps, { toStage: "ground", onEvent: (event) => events.push(event) });
 
@@ -107,7 +120,7 @@ describe("runPipeline", () => {
     ]);
     await expect(readFile(path.join(dir, "30-grounded.json"), "utf8")).resolves.toContain("外滩");
     await expect(readFile(path.join(dir, "40-plan.json"), "utf8")).rejects.toThrow();
-    expect(deps.llm.run).toHaveBeenCalledTimes(1);
+    expect(mockRun).toHaveBeenCalledTimes(1);
   });
 
   it("puts verified unselected POIs with locations into pool when resuming plan with selection", async () => {
@@ -130,7 +143,8 @@ describe("runPipeline", () => {
     );
     await writeFile(path.join(dir, "25-selection.json"), JSON.stringify({ selectedPoiIds: ["p1", "p2", "p5"], selectedAt: "2026-07-03T00:00:00.000Z" }), "utf8");
     const deps = depsForSuccess();
-    deps.llm.run = vi.fn().mockResolvedValue(JSON.stringify({ days: [{ slots: { morning: ["p1"], afternoon: ["p2"], evening: ["p5"] } }] }));
+    const selectionRun = vi.fn().mockResolvedValue(JSON.stringify({ days: [{ slots: { morning: ["p1"], afternoon: ["p2"], evening: ["p5"] } }] }));
+    __resetProvidersForTest({ deepseek: { run: selectionRun }, "claude-cli": { run: selectionRun } });
 
     await runPipeline(input, deps, { fromStage: "plan" });
 
@@ -149,7 +163,8 @@ describe("runPipeline", () => {
     await writeFile(path.join(dir, "00-input.json"), JSON.stringify(input), "utf8");
     await writeFile(path.join(dir, "30-grounded.json"), JSON.stringify({ grounded: [grounded("p1", "外滩"), grounded("p2", "豫园"), grounded("p3", "商场")], filtered: [] }), "utf8");
     const deps = depsForSuccess();
-    deps.llm.run = vi.fn().mockResolvedValue(JSON.stringify({ days: [{ slots: { morning: ["p1"], afternoon: ["p2", "p3"], evening: [] } }] }));
+    const noSelectionRun = vi.fn().mockResolvedValue(JSON.stringify({ days: [{ slots: { morning: ["p1"], afternoon: ["p2", "p3"], evening: [] } }] }));
+    __resetProvidersForTest({ deepseek: { run: noSelectionRun }, "claude-cli": { run: noSelectionRun } });
 
     await runPipeline(input, deps, { fromStage: "plan" });
 
@@ -186,18 +201,10 @@ describe("runPipeline", () => {
   });
 });
 
-function depsForSuccess(): { fetcher: ContentFetcher & { fetch: ReturnType<typeof vi.fn> }; llm: LLMRunner & { run: ReturnType<typeof vi.fn> }; map: MapProvider } {
+function depsForSuccess(): { fetcher: ContentFetcher & { fetch: ReturnType<typeof vi.fn> }; map: MapProvider } {
   return {
     fetcher: {
       fetch: vi.fn().mockResolvedValue([{ id: "note1", url: input.links[0], title: "t", body: "b", images: [], fetchStatus: "ok" }])
-    },
-    llm: {
-      run: vi
-        .fn()
-        .mockResolvedValueOnce(
-          JSON.stringify({ pois: [{ name: "外滩", type: "sight", reason: "好看", sourceNoteId: "note1", sourceType: "text" }], filtered: [] })
-        )
-        .mockResolvedValue(JSON.stringify({ days: [{ index: 1, items: [planItem()] }], filtered: [], warnings: [] }))
     },
     map: {
       searchPoi: vi.fn().mockResolvedValue({ amapId: "a1", name: "外滩", cityName: "上海市", location: { lng: 1, lat: 1 }, address: "addr" }),
