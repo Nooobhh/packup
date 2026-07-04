@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { DeepseekApiRunner } from "./deepseek-api";
+import { DeepseekApiRunner, LLMApiError } from "./deepseek-api";
+import { LLMTimeoutError } from "./claude-cli";
 
 describe("DeepseekApiRunner 构造", () => {
   it("缺 PACKUP_DEEPSEEK_API_KEY 时 throw", () => {
@@ -102,5 +103,50 @@ describe("DeepseekApiRunner.run model 注入", () => {
     await runner.run({ prompt: "x", timeoutMs: 1000 });
     const body = JSON.parse(fetchImpl.mock.calls[0][1].body as string);
     expect(body.model).toBe("deepseek-v4-flash");
+  });
+});
+
+describe("DeepseekApiRunner.run 错误分类", () => {
+  it("非 2xx 响应抛 LLMApiError 且携带 status 与摘要", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response('{"error":"bad key"}', { status: 401 })
+    );
+    const runner = new DeepseekApiRunner({ apiKey: "sk-test", fetchImpl });
+
+    await expect(runner.run({ prompt: "x", timeoutMs: 1000 })).rejects.toMatchObject({
+      name: "LLMApiError",
+      status: 401,
+      message: expect.stringContaining("401")
+    });
+  });
+
+  it("429/500 都作为 LLMApiError 抛出", async () => {
+    for (const status of [429, 500]) {
+      const fetchImpl = vi.fn().mockResolvedValue(new Response("busy", { status }));
+      const runner = new DeepseekApiRunner({ apiKey: "sk-test", fetchImpl });
+      await expect(runner.run({ prompt: "x", timeoutMs: 1000 })).rejects.toBeInstanceOf(LLMApiError);
+    }
+  });
+
+  it("AbortError 转为 LLMTimeoutError", async () => {
+    const fetchImpl = vi.fn().mockImplementation((_url, init) => {
+      return new Promise((_resolve, reject) => {
+        (init as { signal: AbortSignal }).signal.addEventListener("abort", () => {
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          reject(err);
+        });
+      });
+    });
+    const runner = new DeepseekApiRunner({ apiKey: "sk-test", fetchImpl });
+
+    await expect(runner.run({ prompt: "x", timeoutMs: 20 })).rejects.toBeInstanceOf(LLMTimeoutError);
+  });
+
+  it("网络错误透传为裸 Error", async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(new Error("ECONNREFUSED"));
+    const runner = new DeepseekApiRunner({ apiKey: "sk-test", fetchImpl });
+
+    await expect(runner.run({ prompt: "x", timeoutMs: 1000 })).rejects.toThrow("ECONNREFUSED");
   });
 });

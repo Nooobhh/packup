@@ -1,7 +1,15 @@
 import type { LLMRunner } from "./types";
+import { LLMTimeoutError } from "./claude-cli";
 
 const ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_MODEL = "deepseek-v4-flash";
+
+export class LLMApiError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+    this.name = "LLMApiError";
+  }
+}
 
 export class DeepseekApiRunner implements LLMRunner {
   private readonly apiKey: string;
@@ -27,16 +35,32 @@ export class DeepseekApiRunner implements LLMRunner {
     };
     if (opts.jsonSchema) body.response_format = { type: "json_object" };
 
-    const res = await this.fetchImpl(ENDPOINT, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`
-      },
-      body: JSON.stringify(body)
-    });
-    const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-    return json.choices?.[0]?.message?.content?.trim() ?? "";
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
+    try {
+      const res = await this.fetchImpl(ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new LLMApiError(res.status, `DeepSeek API ${res.status}: ${summarize(text)}`);
+      }
+      const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+      return json.choices?.[0]?.message?.content?.trim() ?? "";
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new LLMTimeoutError(`DeepSeek API timed out after ${opts.timeoutMs}ms`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
 
@@ -52,4 +76,8 @@ function buildMessages(prompt: string, jsonSchema?: object) {
   }
   messages.push({ role: "user", content: prompt });
   return messages;
+}
+
+function summarize(v: string) {
+  return v.replace(/\s+/g, " ").trim().slice(0, 200);
 }
