@@ -98,6 +98,16 @@ describe("ClaudeCliRunner", () => {
       })
     ).resolves.toBe("hello");
   });
+
+  it("opts.model 优先于 env PACKUP_CLAUDE_MODEL", async () => {
+    const execClaude = vi.fn().mockResolvedValue({ stdout: JSON.stringify({ result: "ok" }) });
+    const runner = new ClaudeCliRunner({ execClaude, env: { PACKUP_CLAUDE_MODEL: "opus" } });
+
+    await runner.run({ prompt: "x", model: "haiku", timeoutMs: 1 });
+    const args = execClaude.mock.calls[0][0] as string[];
+    const modelIdx = args.indexOf("--model");
+    expect(args[modelIdx + 1]).toBe("haiku");
+  });
 });
 
 describe("stdout error extraction", () => {

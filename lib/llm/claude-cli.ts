@@ -22,7 +22,8 @@ export class ClaudeCliRunner implements LLMRunner {
   async run(opts: Parameters<LLMRunner["run"]>[0]): Promise<string> {
     try {
       const prompt = withImageReferences(opts.prompt, opts.images ?? []);
-      const args = ["-p", prompt, "--output-format", "json", "--model", this.env.PACKUP_CLAUDE_MODEL || "sonnet"];
+      const model = opts.model ?? this.env.PACKUP_CLAUDE_MODEL ?? "sonnet";
+      const args = ["-p", prompt, "--output-format", "json", "--model", model];
       // claude CLI 2.1.195 的 --json-schema 参数要求内联 JSON 字符串(传文件路径会被当 JSON 解析而报错)
       if (opts.jsonSchema) args.push("--json-schema", JSON.stringify(opts.jsonSchema));
       if (opts.mcpConfig) args.push("--mcp-config", opts.mcpConfig);
