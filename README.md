@@ -7,7 +7,7 @@ npm install
 cp .env.example .env.local   # 填 AMAP_REST_KEY / NEXT_PUBLIC_AMAP_JS_KEY（高德开放平台）
 npm run dev                  # http://localhost:3000
 ```
-运行前提：本机安装并登录 `claude` CLI（LLM 环节走本机订阅，零 API 费用）。当前为自用版，不部署公网。
+运行前提：① 配 `PACKUP_DEEPSEEK_API_KEY`（parse-query / plan 走 DeepSeek API）；② 本机安装并登录 `claude` CLI（extract 段多模态提取仍用 `claude -p`，待下阶段替换）。当前为自用版，不部署公网。
 
 ## 架构
 两段式管线，段间 zod 契约衔接，中间产物落盘（`data/trips/<id>/`）可断点续跑：

@@ -6,12 +6,16 @@
 
 ## [Unreleased]
 ### Added
+- LLM API Router：`lib/llm/router.ts` 集中 stage→provider+model 映射，pipeline 各段通过 `runForStage(stage, opts)` 调用。
+- `DeepseekApiRunner`：DeepSeek Chat Completions API 的 provider 实现（裸 fetch，`PACKUP_DEEPSEEK_API_KEY`）。
 - 行程页升级为三栏画布工作台(池/按天泳道/多天地图):卡片拖拽编排(池↔天/跨天/天内),增删天、改主题、编辑备注时段,一键智能排程后可手调(cc27eae)
 - 手动从零建行程:不导入笔记,目的地+天数直达空工作台;高德 POI 搜索加点入池或入天(453f8cb)
 - 交通编辑:段级四方式切换(新增骑行)+全局「长短途」两档默认偏好,保存偏好可一键全程重算(6d15ef1)
 - 地点详情面板:营业时间/评分/推荐理由+来源笔记原文引用,可跳回原帖(cc27eae)
 - 选点页落选地点自动进待计划池,选漏可随时捞回不再丢弃(854a082)
 ### Changed
+- parse-query / plan 两段切至 DeepSeek API（默认 `deepseek-v4-flash`）；extract 段仍走本机 `claude -p`。
+- 三个 pipeline stage 消费者签名收窄：不再显式传 LLMRunner，由 router 分发。
 - 画布编辑走 PATCH op 集(增删移/排程/交通/偏好),前后端共享同一结构编辑核心,卡片在池与行程间移动不丢失不重复(ec42459)
 ### Fixed
 - 选点页零候选时不再空白呆立,显式提示原因并指路诊断文件(439e4c2)
