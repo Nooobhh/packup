@@ -5,6 +5,8 @@
 写作风格: 单条目一行 ≤ 200 字符 + 视角面向消费者（详见 hazeflow/_shared/versioning.md）
 
 ## [Unreleased]
+
+## [0.4.1] - 2026-07-05 — 画布工作台 + LLM API 路由：parse/plan 走 DeepSeek API
 ### Added
 - LLM API Router：`lib/llm/router.ts` 集中 stage→provider+model 映射，pipeline 各段通过 `runForStage(stage, opts)` 调用。
 - `DeepseekApiRunner`：DeepSeek Chat Completions API 的 provider 实现（裸 fetch，`PACKUP_DEEPSEEK_API_KEY`）。
