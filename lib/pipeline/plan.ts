@@ -4,7 +4,7 @@ import { buildPlanPrompt, type PlanPromptPoi, type PlanViolationDetail } from "@
 import { BUDGETS } from "./budgets";
 import { backtrackRatio, clusterByDistance, haversineKm } from "./geo";
 import type { FilteredItem, GroundedPoi, LngLat, PlanDay, PlanItem, Slot, TransportPrefs, TripInput, TripPlan } from "./types";
-import { FilteredItemSchema, TripPlanSchema } from "./types";
+import { DaysDecisionSchema, FilteredItemSchema, TripPlanSchema } from "./types";
 
 const SLOT_ORDER: Slot[] = ["morning", "afternoon", "evening"];
 const DEFAULT_DURATION: Record<string, number> = {
@@ -125,7 +125,8 @@ async function callPlanner(slimPois: PlanPromptPoi[], input: TripInput, distance
         evening: Array.isArray(day.slots?.evening) ? day.slots.evening : []
       }
     })),
-    daysDecision: parsed.daysDecision
+    // LLM 输出的 daysDecision 形状不可信,畸形直接丢弃(ensureDaysDecision 有兜底)
+    daysDecision: DaysDecisionSchema.safeParse(parsed.daysDecision).success ? parsed.daysDecision : undefined
   };
 }
 
@@ -162,7 +163,9 @@ function rehydratePlannerOutput(
     }
     return { index: dayIndex + 1, theme: day.theme, items };
   });
-  return { days, pool: [], filtered: [], warnings: Array.from(warnings), daysDecision: planner.daysDecision };
+  // LLM 输出漏排的 POI 扫尾入池,不静默丢弃
+  const pool = grounded.filter((poi) => !used.has(poiKey(poi))).map((poi) => poolItemFromPoi(poi));
+  return { days, pool, filtered: [], warnings: Array.from(warnings), daysDecision: planner.daysDecision };
 }
 
 function fallbackFromGrounded(
@@ -188,6 +191,13 @@ function fallbackFromGrounded(
     days[0].items.push(planItemFromPoi(first, "morning", clusters.get(key) ?? key));
   }
   return { days, pool: [], filtered: [], warnings: [] };
+}
+
+export function poolItemFromPoi(poi: GroundedPoi): PlanItem {
+  const item = planItemFromPoi(poi, "morning", poiKey(poi));
+  delete item.slot;
+  delete item.transportToNext;
+  return item;
 }
 
 export function planItemFromPoi(poi: GroundedPoi, slot: Slot, clusterKey: string): PlanItem {

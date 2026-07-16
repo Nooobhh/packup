@@ -60,7 +60,7 @@ export class AmapRestProvider implements MapProvider {
       location,
       address: string(first.address) || undefined,
       cityName: string(first.cityname) || string(first.cityName) || undefined,
-      openHours: businessField(detail, ["opentime_today", "open_time", "business_hours"]),
+      openHours: businessField(detail, ["opentime_today", "open_time", "opentime2", "business_hours"]),
       rating: businessField(detail, ["rating", "score"])
     };
   }
@@ -183,7 +183,7 @@ function poiFromRecord(poi: Record<string, unknown>, fallbackName: string): Amap
     location: parseLocation(string(poi.location)),
     address: string(poi.address) || undefined,
     cityName: string(poi.cityname) || string(poi.cityName) || undefined,
-    openHours: businessField(poi, ["opentime_today", "open_time", "business_hours"]),
+    openHours: businessField(poi, ["opentime_today", "open_time", "opentime2", "business_hours"]),
     rating: businessField(poi, ["rating", "score"])
   };
 }
@@ -272,10 +272,13 @@ function parseLocation(value: string): LngLat {
 }
 
 function businessField(poi: Record<string, unknown>, keys: string[]) {
-  const business = poi.business && typeof poi.business === "object" ? (poi.business as Record<string, unknown>) : poi;
-  for (const key of keys) {
-    const value = string(business[key]);
-    if (value) return value;
+  // v5 放 business,v3 放 biz_ext,兜底读顶层
+  const containers = [poi.business, poi.biz_ext, poi].filter((value): value is Record<string, unknown> => Boolean(value && typeof value === "object"));
+  for (const container of containers) {
+    for (const key of keys) {
+      const value = string(container[key]);
+      if (value) return value;
+    }
   }
   return undefined;
 }

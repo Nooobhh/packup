@@ -26,7 +26,7 @@ beforeEach(async () => {
       JSON.stringify({ pois: [{ name: "外滩", type: "sight", reason: "好看", sourceNoteId: "note1", sourceType: "text" }], filtered: [] })
     )
     .mockResolvedValue(JSON.stringify({ days: [{ index: 1, items: [planItem()] }], filtered: [], warnings: [] }));
-  __resetProvidersForTest({ deepseek: { run: mockRun }, "claude-cli": { run: mockRun } });
+  __resetProvidersForTest({ pptoken: { run: mockRun }, deepseek: { run: mockRun }, "claude-cli": { run: mockRun } });
   (globalThis as unknown as { __packupTestLlmRun: typeof mockRun }).__packupTestLlmRun = mockRun;
 });
 
@@ -93,7 +93,7 @@ describe("runPipeline", () => {
     await writeFile(path.join(dir, "30-grounded.json"), JSON.stringify({ grounded: [grounded()], filtered: [] }), "utf8");
     const deps = depsForSuccess();
     const planRun = vi.fn().mockResolvedValue(JSON.stringify({ days: [{ index: 1, items: [planItem()] }], filtered: [], warnings: [] }));
-    __resetProvidersForTest({ deepseek: { run: planRun }, "claude-cli": { run: planRun } });
+    __resetProvidersForTest({ pptoken: { run: planRun }, deepseek: { run: planRun }, "claude-cli": { run: planRun } });
 
     await runPipeline(input, deps);
 
@@ -123,7 +123,7 @@ describe("runPipeline", () => {
     expect(mockRun).toHaveBeenCalledTimes(1);
   });
 
-  it("puts verified unselected POIs with locations into pool when resuming plan with selection", async () => {
+  it("puts all unselected POIs into pool when resuming plan with selection", async () => {
     const dir = path.join(dataRoot, "trip-test");
     await mkdir(dir, { recursive: true });
     await writeFile(path.join(dir, "00-input.json"), JSON.stringify(input), "utf8");
@@ -144,17 +144,18 @@ describe("runPipeline", () => {
     await writeFile(path.join(dir, "25-selection.json"), JSON.stringify({ selectedPoiIds: ["p1", "p2", "p5"], selectedAt: "2026-07-03T00:00:00.000Z" }), "utf8");
     const deps = depsForSuccess();
     const selectionRun = vi.fn().mockResolvedValue(JSON.stringify({ days: [{ slots: { morning: ["p1"], afternoon: ["p2"], evening: ["p5"] } }] }));
-    __resetProvidersForTest({ deepseek: { run: selectionRun }, "claude-cli": { run: selectionRun } });
+    __resetProvidersForTest({ pptoken: { run: selectionRun }, deepseek: { run: selectionRun }, "claude-cli": { run: selectionRun } });
 
     await runPipeline(input, deps, { fromStage: "plan" });
 
     const plan = JSON.parse(await readFile(path.join(dir, "40-plan.json"), "utf8"));
     TripPlanSchema.parse(plan);
     expect(plan.days.flatMap((day: { items: Array<{ poiId: string }> }) => day.items.map((item) => item.poiId))).toEqual(["p1", "p2", "p5"]);
-    expect(plan.pool.map((item: { poiId: string; slot?: string; transportToNext?: unknown }) => item.poiId)).toEqual(["p3"]);
+    expect(plan.pool.map((item: { poiId: string; slot?: string; transportToNext?: unknown }) => item.poiId)).toEqual(["p3", "p4"]);
     expect(plan.pool[0].slot).toBeUndefined();
     expect(plan.pool[0].transportToNext).toBeUndefined();
-    expect(plan.filtered).toEqual([expect.objectContaining({ id: "p4", stage: "plan", reason: "用户未选入排程" })]);
+    expect(plan.pool[1]).toMatchObject({ poiId: "p4", verified: false });
+    expect(plan.filtered).toEqual([]);
   });
 
   it("uses all grounded POIs when resuming plan without a selection file", async () => {
@@ -164,7 +165,7 @@ describe("runPipeline", () => {
     await writeFile(path.join(dir, "30-grounded.json"), JSON.stringify({ grounded: [grounded("p1", "外滩"), grounded("p2", "豫园"), grounded("p3", "商场")], filtered: [] }), "utf8");
     const deps = depsForSuccess();
     const noSelectionRun = vi.fn().mockResolvedValue(JSON.stringify({ days: [{ slots: { morning: ["p1"], afternoon: ["p2", "p3"], evening: [] } }] }));
-    __resetProvidersForTest({ deepseek: { run: noSelectionRun }, "claude-cli": { run: noSelectionRun } });
+    __resetProvidersForTest({ pptoken: { run: noSelectionRun }, deepseek: { run: noSelectionRun }, "claude-cli": { run: noSelectionRun } });
 
     await runPipeline(input, deps, { fromStage: "plan" });
 

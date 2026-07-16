@@ -10,10 +10,9 @@ import { AmapRestProvider } from "@/lib/map/amap-rest";
 import type { MapProvider } from "@/lib/map/types";
 import { runExtract } from "./extract";
 import { runGround } from "./ground";
-import { planItemFromPoi, runPlan } from "./plan";
+import { poolItemFromPoi, runPlan } from "./plan";
 import {
   ExtractOutputSchema,
-  FilteredItemSchema,
   GroundOutputSchema,
   NoteSchema,
   SelectionSchema,
@@ -133,36 +132,16 @@ async function runPlanStage(input: TripInput, map: MapProvider, workDir: string)
   const ground = GroundOutputSchema.parse(await readJson(path.join(workDir, outputFiles.ground)));
   const selectionFile = path.join(workDir, "25-selection.json");
   let selectedGrounded = ground.grounded;
-  let filtered = ground.filtered;
   let poolPois: GroundOutput["grounded"] = [];
   if (await exists(selectionFile)) {
     const selection = SelectionSchema.parse(await readJson(selectionFile));
     const selected = new Set(selection.selectedPoiIds);
     selectedGrounded = ground.grounded.filter((poi) => selected.has(poi.id ?? poi.amapId ?? poi.name));
-    const unselected = ground.grounded.filter((poi) => !selected.has(poi.id ?? poi.amapId ?? poi.name));
-    poolPois = unselected.filter((poi) => poi.verified === true && Boolean(poi.location));
-    filtered = [
-      ...ground.filtered,
-      ...unselected
-        .filter((poi) => !(poi.verified === true && Boolean(poi.location)))
-        .map((poi) =>
-          FilteredItemSchema.parse({
-            id: poi.id ?? poi.amapId ?? poi.name,
-            name: poi.name,
-            sourceNoteId: poi.sourceNoteId,
-            stage: "plan",
-            reason: "用户未选入排程"
-          })
-        )
-    ];
+    // 落选一律入池(含未验证/无坐标),与选点页「未选中的地点会进入待计划池」承诺一致
+    poolPois = ground.grounded.filter((poi) => !selected.has(poi.id ?? poi.amapId ?? poi.name));
   }
-  const plan = await runPlan(selectedGrounded, filtered, input, map);
-  plan.pool = poolPois.map((poi) => {
-    const item = planItemFromPoi(poi, "morning", poi.id ?? poi.amapId ?? poi.name);
-    delete item.slot;
-    delete item.transportToNext;
-    return item;
-  });
+  const plan = await runPlan(selectedGrounded, ground.filtered, input, map);
+  plan.pool = [...plan.pool, ...poolPois.map((poi) => poolItemFromPoi(poi))];
   await writeJson(path.join(workDir, outputFiles.plan), TripPlanSchema.parse(plan));
 }
 

@@ -34,6 +34,22 @@ describe("AmapRestProvider", () => {
     });
   });
 
+  it("reads openHours and rating from v3 biz_ext container", async () => {
+    // 真实 v3 place API 把营业信息放在 biz_ext(而非 v5 的 business)
+    const bizExt = { open_time: "07:30-17:30", opentime2: "周一至周日 07:30-17:30", rating: "4.9", cost: [] };
+    const fetchJson = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "1", pois: [{ id: "p1", name: "灵隐寺", location: "120.1,30.2", biz_ext: bizExt }] })
+      .mockResolvedValueOnce({ status: "1", pois: [{ id: "p1", biz_ext: bizExt }] });
+    const provider = new AmapRestProvider({ env: { AMAP_REST_KEY: "k" }, fetchJson });
+
+    await expect(provider.searchPoi("灵隐寺", "杭州")).resolves.toMatchObject({ openHours: "07:30-17:30", rating: "4.9" });
+
+    const listFetch = vi.fn().mockResolvedValue({ status: "1", pois: [{ id: "p2", name: "法喜寺", location: "120.1,30.2", biz_ext: bizExt }] });
+    const listProvider = new AmapRestProvider({ env: { AMAP_REST_KEY: "k" }, fetchJson: listFetch });
+    await expect(listProvider.searchPois("寺", "杭州")).resolves.toEqual([expect.objectContaining({ openHours: "07:30-17:30", rating: "4.9" })]);
+  });
+
   it("searchPoi returns null on no results and throws Amap error code on HTTP/API failure", async () => {
     await expect(
       new AmapRestProvider({ env: { AMAP_REST_KEY: "k" }, fetchJson: vi.fn().mockResolvedValue({ status: "1", pois: [] }) }).searchPoi(
