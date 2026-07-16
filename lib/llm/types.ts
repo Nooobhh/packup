@@ -8,6 +8,7 @@ export interface LLMRunner {
     mcpConfig?: string;
     allowedTools?: string[];
     model?: string;
+    reasoningEffort?: "minimal" | "low" | "medium" | "high";
     timeoutMs: number;
   }): Promise<string>;
 }

@@ -1,16 +1,20 @@
 import { ClaudeCliRunner } from "./claude-cli";
 import { DeepseekApiRunner } from "./deepseek-api";
+import { PptokenApiRunner } from "./pptoken-api";
 import type { LLMRunner, Stage } from "./types";
 
 const PROVIDERS: Record<string, () => LLMRunner> = {
   deepseek: () => new DeepseekApiRunner(),
-  "claude-cli": () => new ClaudeCliRunner()
+  "claude-cli": () => new ClaudeCliRunner(),
+  pptoken: () => new PptokenApiRunner()
 };
 
-const STAGE_MODELS: Record<Stage, { provider: keyof typeof PROVIDERS; model: string }> = {
-  parseQuery: { provider: "deepseek", model: "deepseek-v4-flash" },
-  extract: { provider: "claude-cli", model: "sonnet" },
-  plan: { provider: "deepseek", model: "deepseek-v4-flash" }
+// pptoken 为 OpenAI 兼容中转站;裸名 gpt-5.6 上游不稳,用 terra 变体;effort 按任务轻重分档(实测 low≈4s/default≈22s)
+type StageConfig = { provider: keyof typeof PROVIDERS; model: string; reasoningEffort?: "minimal" | "low" | "medium" | "high" };
+const STAGE_MODELS: Record<Stage, StageConfig> = {
+  parseQuery: { provider: "pptoken", model: "gpt-5.6-terra", reasoningEffort: "low" },
+  extract: { provider: "pptoken", model: "gpt-5.6-terra", reasoningEffort: "low" },
+  plan: { provider: "pptoken", model: "gpt-5.6-terra", reasoningEffort: "medium" }
 };
 
 const instances = new Map<string, LLMRunner>();
@@ -29,7 +33,7 @@ export async function runForStage(
   opts: Omit<Parameters<LLMRunner["run"]>[0], "model">
 ): Promise<string> {
   const cfg = STAGE_MODELS[stage];
-  return get(cfg.provider).run({ ...opts, model: cfg.model });
+  return get(cfg.provider).run({ ...opts, model: cfg.model, reasoningEffort: cfg.reasoningEffort });
 }
 
 export function __resetProvidersForTest(overrides?: Record<string, LLMRunner>): void {

@@ -9,7 +9,7 @@ let mockRun: ReturnType<typeof vi.fn>;
 function installMock(result = "{}") {
   mockRun = vi.fn().mockResolvedValue(result);
   const mock: LLMRunner = { run: mockRun };
-  __resetProvidersForTest({ deepseek: mock, "claude-cli": mock });
+  __resetProvidersForTest({ pptoken: mock, deepseek: mock, "claude-cli": mock });
 }
 
 afterEach(() => __resetProvidersForTest());
@@ -45,7 +45,7 @@ describe("parseQuery", () => {
       preferences: ["寺院", "咖啡"]
     });
     expect(mockRun).toHaveBeenCalledTimes(1);
-    expect(mockRun).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: BUDGETS.parseQueryMs, model: "deepseek-v4-flash" }));
+    expect(mockRun).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: BUDGETS.parseQueryMs, model: "gpt-5.6-terra" }));
   });
 
   it("throws a helpful error when fallback cannot identify a destination", async () => {

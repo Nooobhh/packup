@@ -23,7 +23,7 @@ beforeEach(async () => {
     .fn()
     .mockResolvedValueOnce(JSON.stringify({ destination: "杭州", days: 3, preferences: [] }))
     .mockResolvedValue(JSON.stringify({ pois: [], filtered: [] }));
-  __resetProvidersForTest({ deepseek: { run: mockRun }, "claude-cli": { run: mockRun } });
+  __resetProvidersForTest({ pptoken: { run: mockRun }, deepseek: { run: mockRun }, "claude-cli": { run: mockRun } });
 });
 
 afterEach(async () => {
@@ -86,7 +86,7 @@ describe("POST /api/generate", () => {
 
   it("returns 400 when query cannot be parsed", async () => {
     const failRun = vi.fn().mockRejectedValue(new Error("无法识别目的地"));
-    __resetProvidersForTest({ deepseek: { run: failRun }, "claude-cli": { run: failRun } });
+    __resetProvidersForTest({ pptoken: { run: failRun }, deepseek: { run: failRun }, "claude-cli": { run: failRun } });
     const res = await POST(new Request("http://test/api/generate", { method: "POST", body: JSON.stringify({ query: "帮我规划一个超级好玩的假期行程", links: ["u"] }) }));
     expect(res.status).toBe(400);
     expect(await res.text()).toContain("无法识别目的地");

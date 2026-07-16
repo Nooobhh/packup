@@ -22,7 +22,7 @@ function note(id: string, images: string[] = [], body = "正文"): Note {
 function installMock(runImpl?: LLMRunner["run"]) {
   const run = runImpl ? vi.fn(runImpl) : vi.fn();
   const mock: LLMRunner = { run };
-  __resetProvidersForTest({ deepseek: mock, "claude-cli": mock });
+  __resetProvidersForTest({ pptoken: mock, deepseek: mock, "claude-cli": mock });
   return run;
 }
 
