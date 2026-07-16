@@ -2,11 +2,10 @@
 > 项目 overview（现在 + 未来）。已发布历史看 CHANGELOG.md，agent 指令看 CLAUDE.md。
 
 ## 当前主线
-0.4.1 已发版（画布工作台 + LLM API Router，parse-query / plan 走 DeepSeek API）；下一版主线待定
+0.5.0（待发版）：LLM 换轨 pptoken gpt-5.6（三段全切、识图直连）+ 待计划池与营业信息修复
 
 ## Backlog
 <!-- 待开发功能池，按优先级倒序，置顶 = 下一步。单条目 ≤ 3 行：「优先级 + 一句话描述 + 触发线索」-->
-- P2 extract 段换多模态 API：接入 gemini/glm-4v/qwen-vl 三选一，脱离 claude -p 依赖，router 加一个 provider 类。触发：DS 切换稳定后
 - P2 导出长图：行程导出竖版分享图（竞品仅朴素文字单，我方有地图/图片/笔记素材可超车）。触发：画布稳定后
 - P2 UI 美化阶段：工作台视觉正式化（POI 卡片配图/marker 按天着色/焦点按钮选中态/布局精修），对标圆周旅迹。触发：0.4.0 发版后
 - P1 地图 SDK 加载失败韧性：失败文案与 key 缺失区分 + script 竞态清理重试。触发：day-map SDK 失败场景

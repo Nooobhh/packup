@@ -7,7 +7,7 @@ npm install
 cp .env.example .env.local   # 填 AMAP_REST_KEY / NEXT_PUBLIC_AMAP_JS_KEY（高德开放平台）
 npm run dev                  # http://localhost:3000
 ```
-运行前提：① 配 `PACKUP_DEEPSEEK_API_KEY`（parse-query / plan 走 DeepSeek API）；② 本机安装并登录 `claude` CLI（extract 段多模态提取仍用 `claude -p`，待下阶段替换）。当前为自用版，不部署公网。
+运行前提：配 `PACKUP_PPTOKEN_API_KEY`（parse-query / extract / plan 三段走 pptoken 中转站调 gpt-5.6，OpenAI 兼容 API）。DeepSeek / 本机 `claude` CLI 为备用 provider，默认不需要。当前为自用版，不部署公网。
 
 ## 架构
 两段式管线，段间 zod 契约衔接，中间产物落盘（`data/trips/<id>/`）可断点续跑：
@@ -16,7 +16,7 @@ npm run dev                  # http://localhost:3000
 一句话需求（「香港3天2晚 city walk+美食」）+ 小红书链接
   → 解析目的地/天数/偏好（规则先行，LLM 兜底）
   → Fetch（免登录裸 HTTP 解析笔记，正文+图片）
-  → Extract（claude -p 多模态提取 POI，纯图笔记同路）
+  → Extract（gpt-5.6 多模态提取 POI，纯图笔记同路）
   → Ground（高德 REST 校验真实性，查无标「未验证」）
   → 【选点确认页】勾选要排入行程的 POI（已验证默认勾选，落选自动进待计划池）
   → Plan（一次 LLM 分天 + 算法排序 + 确定性兜底，邻近点聚合）

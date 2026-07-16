@@ -5,6 +5,14 @@
 写作风格: 单条目一行 ≤ 200 字符 + 视角面向消费者（详见 hazeflow/_shared/versioning.md）
 
 ## [Unreleased]
+### Added
+- 新增 pptoken 中转站 provider(OpenAI 兼容,gpt-5.6 系列):支持笔记图片识图提取与按任务轻重的推理力度分档
+### Changed
+- 三段 LLM(parse-query/extract/plan)全部切至 pptoken gpt-5.6-terra,不再依赖本机 claude CLI 登录与 DeepSeek 余额;原 provider 降为备用
+### Fixed
+- 待计划池不再恒为空:落选地点(含未验证)一律入池,排程 LLM 漏排的选中地点也扫尾入池,不再静默丢失
+- 地点详情「营业/评分未知」修复:高德 v3 返回的营业字段(biz_ext)此前未被读取,营业时间与评分现正常展示
+- 排程 LLM 输出畸形 daysDecision 字段不再导致 plan 段整段失败,自动丢弃并走兜底
 
 ## [0.4.1] - 2026-07-05 — 画布工作台 + LLM API 路由：parse/plan 走 DeepSeek API
 ### Added
