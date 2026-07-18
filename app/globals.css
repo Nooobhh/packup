@@ -3,21 +3,47 @@
 @tailwind utilities;
 
 :root {
-  --background: 0 0% 100%;
-  --foreground: 220 18% 12%;
+  /* 旧 token 保留名称,色值升级到 Sparkles 设计语言(docs/DESIGN.md) */
+  --background: 40 43% 99%;
+  --foreground: 240 7% 11%;
   --card: 0 0% 100%;
-  --card-foreground: 220 18% 12%;
-  --primary: 214 78% 36%;
+  --card-foreground: 240 7% 11%;
+  --primary: 145 43% 29%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 173 40% 92%;
-  --secondary-foreground: 173 40% 20%;
-  --muted: 220 14% 95%;
-  --muted-foreground: 220 9% 42%;
-  --destructive: 0 72% 48%;
+  --secondary: 139 44% 92%;
+  --secondary-foreground: 145 43% 22%;
+  --muted: 45 18% 96%;
+  --muted-foreground: 240 4% 45%;
+  --destructive: 8 62% 48%;
   --destructive-foreground: 0 0% 100%;
-  --border: 220 13% 88%;
-  --input: 220 13% 88%;
-  --ring: 214 78% 36%;
+  --border: 43 12% 89%;
+  --input: 43 12% 89%;
+  --ring: 145 43% 29%;
+
+  /* Sparkles 画布 token(hex 直用) */
+  --paper: #fdfcfa;
+  --ink: #1b1b1f;
+  --ink-soft: #6e6e76;
+  --line: #e7e5e0;
+  --accent: #2a6942;
+  --accent-soft: #e3f4e9;
+  --accent-bright: #54b16c;
+  --day-tan: #d9a86b;
+  --day-blue: #7d95c9;
+  --day-sage: #6f9b62;
+  --day-brick: #c96a5b;
+  --day-cream: #f4d8ae;
+  --warn: #fbc2b9;
+  --warn-ink: #8c3b2e;
+}
+
+/* Display 衬线:Fraunces 可变字体(Gelica 的开源近亲,圆润软衬线),自托管 */
+@font-face {
+  font-family: "Fraunces";
+  src: url("/fonts/fraunces-var.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
 }
 
 * {
@@ -26,7 +52,43 @@
 
 body {
   margin: 0;
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+
+.font-display {
+  /* 拉丁走 Fraunces(圆润软衬线),中文走霞鹜文楷(手写楷体),兜底系统楷体 */
+  font-family: "Fraunces", "LXGW WenKai Screen", "Kaiti SC", "STKaiti", Georgia, serif;
+  font-variation-settings: "SOFT" 60, "WONK" 1, "opsz" 40;
+  /* 文楷只有 400:禁伪加粗保楷书原味;Fraunces 可变轴真加粗不受影响 */
+  font-synthesis: none;
+}
+
+/* die-cut 贴纸硬投影(素材自带白边) */
+.sticker-drop {
+  filter: drop-shadow(2px 3px 0 rgba(27, 27, 31, 0.16));
+}
+
+.hard-shadow {
+  box-shadow: 2px 3px 0 rgba(27, 27, 31, 0.14);
+}
+
+.canvas-grab {
+  cursor: grab;
+}
+
+.canvas-grab:active {
+  cursor: grabbing;
+}
+
+@keyframes sticker-pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }

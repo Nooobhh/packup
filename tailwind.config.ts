@@ -29,6 +29,21 @@ const config: Config = {
         destructive: {
           DEFAULT: "hsl(var(--destructive))",
           foreground: "hsl(var(--destructive-foreground))"
+        },
+        paper: "var(--paper)",
+        ink: {
+          DEFAULT: "var(--ink)",
+          soft: "var(--ink-soft)"
+        },
+        line: "var(--line)",
+        accent: {
+          DEFAULT: "var(--accent)",
+          soft: "var(--accent-soft)",
+          bright: "var(--accent-bright)"
+        },
+        warn: {
+          DEFAULT: "var(--warn)",
+          ink: "var(--warn-ink)"
         }
       },
       borderRadius: {

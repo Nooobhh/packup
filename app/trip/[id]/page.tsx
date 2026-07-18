@@ -1,8 +1,8 @@
 import React from "react";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { FailedLinksSection, FilteredSection } from "@/components/filtered-section";
-import { TripWorkbench } from "@/components/workbench/trip-workbench";
+import { CanvasWorkbench } from "@/components/canvas/canvas-workbench";
+import { CanvasNotices } from "@/components/canvas/canvas-notices";
 import { NoteSchema, TripInputSchema, TripPlanSchema } from "@/lib/pipeline/types";
 
 export default async function TripPage({ params }: { params: Promise<{ id: string }> }) {
@@ -11,28 +11,25 @@ export default async function TripPage({ params }: { params: Promise<{ id: strin
   if (!payload) return <main className="p-6">行程不存在或尚未生成</main>;
   const { plan, failedLinks, notes } = payload;
   return (
-    <main className="space-y-6 px-6 py-8">
-      {plan.warnings.length ? (
-        <details className="rounded-lg border bg-yellow-50 p-4 text-sm">
-          <summary className="cursor-pointer font-medium">提示 {plan.warnings.length} 条</summary>
-          <ul className="mt-2 list-disc space-y-1 pl-5">
-            {plan.warnings.map((warning) => <li key={warning}>{warning}</li>)}
-          </ul>
-        </details>
-      ) : null}
-      {renderDaysDecision(plan.daysDecision)}
-      <FailedLinksSection failedLinks={failedLinks} />
-      <TripWorkbench initialPlan={plan} initialNotes={notes} tripId={id} />
-      <FilteredSection filtered={plan.filtered} />
+    <main>
+      <CanvasWorkbench initialPlan={plan} initialNotes={notes} tripId={id} />
+      <CanvasNotices
+        notices={{
+          daysDecision: daysDecisionText(plan.daysDecision),
+          warnings: plan.warnings,
+          failedLinks,
+          filtered: plan.filtered
+        }}
+      />
     </main>
   );
 }
 
-function renderDaysDecision(decision: unknown) {
+function daysDecisionText(decision: unknown): string | undefined {
   // 兼容历史落盘数据里 LLM 输出的字面量 "null" 等无意义字符串
   const text = typeof decision === "string" ? decision : decision && typeof decision === "object" && "reason" in decision ? String((decision as { reason: unknown }).reason) : "";
-  if (!text.trim() || ["null", "none", "undefined"].includes(text.trim().toLowerCase())) return null;
-  return <p className="text-sm text-muted-foreground">{text}</p>;
+  if (!text.trim() || ["null", "none", "undefined"].includes(text.trim().toLowerCase())) return undefined;
+  return text;
 }
 
 async function readTripPayload(id: string) {
@@ -53,13 +50,26 @@ async function readTripPayload(id: string) {
       ...notes.filter((note) => note.fetchStatus === "failed").map((note) => ({ url: note.url, reason: note.failReason ?? "fetch failed" })),
       ...(pois.failedNotes ?? []).map((failed) => ({ url: byNoteId.get(failed.noteId)?.url ?? failed.noteId, reason: failed.reason }))
     ];
-    return {
-      input,
-      plan,
-      failedLinks,
-      notes: notes.map((note) => ({ id: note.id, title: note.title, author: note.author, url: note.url, body: note.body }))
-    };
+    const notesWithImages = await Promise.all(
+      notes.map(async (note) => ({
+        id: note.id,
+        title: note.title,
+        author: note.author,
+        url: note.url,
+        images: await localImagePaths(dir, id, note.id)
+      }))
+    );
+    return { input, plan, failedLinks, notes: notesWithImages };
   } catch {
     return null;
   }
+}
+
+/** 列出 fetch 阶段缓存到本地的笔记图片,转为 serve API 路径 */
+async function localImagePaths(dir: string, tripId: string, noteId: string): Promise<string[]> {
+  const files = await readdir(path.join(dir, "images", noteId)).catch(() => [] as string[]);
+  return files
+    .filter((file) => /^\d+\.(jpg|jpeg|png|webp)$/i.test(file))
+    .sort((a, b) => parseInt(a, 10) - parseInt(b, 10))
+    .map((file) => `/api/trips/${tripId}/images/${noteId}/${file}`);
 }

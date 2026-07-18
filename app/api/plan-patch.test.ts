@@ -180,6 +180,26 @@ describe("PATCH /api/trips/[id]/plan canvas ops", () => {
     expect(await readPlan("trip-pool-add")).toEqual(plan);
   });
 
+  it("removes a pool group permanently as the only deletion path and rejects unknown ids", async () => {
+    await writePlan("trip-pool-remove", clusteredPlan());
+    const route = vi.fn().mockResolvedValue({ durationMin: 5, distanceKm: 1 });
+    setPatchMap(route);
+    const initial = multiset(await readPlan("trip-pool-remove"));
+
+    const res = await patch("trip-pool-remove", { op: "pool-remove", poolItemId: "pool-cluster" });
+    const plan = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(route).not.toHaveBeenCalled();
+    expect(plan.pool.map((entry: Item) => entry.id)).toEqual(["p0"]);
+    expect(multiset(plan)).toEqual(initial.filter((id) => id !== "pca" && id !== "pcb"));
+    expect(await readPlan("trip-pool-remove")).toEqual(plan);
+
+    const bad = await patch("trip-pool-remove", { op: "pool-remove", poolItemId: "nope" });
+    expect(bad.status).toBe(400);
+    expect(await readPlan("trip-pool-remove")).toEqual(plan);
+  });
+
   it("snaps add-item and move-item insertion indexes out of multi-item cluster interiors", async () => {
     await writePlan("trip-snap-add", clusteredPlan());
     setPatchMap(vi.fn().mockResolvedValue({ durationMin: 5, distanceKm: 1 }));

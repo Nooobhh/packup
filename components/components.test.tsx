@@ -32,28 +32,57 @@ afterEach(async () => {
 });
 
 describe("TripForm", () => {
-  it("renders only query and links inputs and submits that body shape", async () => {
+  it("has-links path posts { destination, days, preferences, links } to /api/generate", async () => {
     const originalFetch = global.fetch;
     global.fetch = vi.fn().mockResolvedValue({ ok: true, body: new ReadableStream({ start: (controller) => controller.close() }) }) as typeof fetch;
     render(<TripForm />);
 
-    expect(screen.getByPlaceholderText("香港3天2晚 city walk+美食")).toBeInTheDocument();
-    expect(screen.getByLabelText("小红书链接")).toBeInTheDocument();
-    expect(screen.queryByText("目的地")).not.toBeInTheDocument();
-    expect(screen.queryByText("transport")).not.toBeInTheDocument();
-    expect(screen.queryByText("pace")).not.toBeInTheDocument();
-
-    fireEvent.change(screen.getByPlaceholderText("香港3天2晚 city walk+美食"), { target: { value: "香港3天 city walk" } });
+    fireEvent.change(screen.getByLabelText("目的地"), { target: { value: "香港" } });
+    fireEvent.change(screen.getByLabelText("天数"), { target: { value: "3" } });
+    fireEvent.click(screen.getByRole("button", { name: /city walk/ }));
+    fireEvent.click(screen.getByRole("button", { name: /美食探店/ }));
     fireEvent.change(screen.getByLabelText("小红书链接"), { target: { value: "hello https://xhslink.com/a and https://example.com/no" } });
-    expect(screen.getByText("识别到 1 条小红书链接")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "生成行程" }));
+    expect(screen.getByText("识别到 1 条")).toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("button", { name: "帮我打包 ✦" }));
     await waitFor(() => expect(global.fetch).toHaveBeenCalled());
-    expect(JSON.parse((global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body)).toEqual({
-      query: "香港3天 city walk",
-      links: ["https://xhslink.com/a"]
+    const [url, init] = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(url).toBe("/api/generate");
+    expect(JSON.parse(init.body)).toEqual({
+      destination: "香港",
+      days: { base: 3 },
+      links: ["https://xhslink.com/a"],
+      mode: "plan",
+      preferences: ["city walk", "美食探店"]
     });
     global.fetch = originalFetch;
+  });
+
+  it("pool-only path posts mode=pool and follows the pool-ready SSE event to /trip/:id", async () => {
+    const originalFetch = global.fetch;
+    const originalLocation = window.location;
+    Object.defineProperty(window, "location", { value: { href: "" }, writable: true });
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('data: {"stage":"plan","status":"pool-ready","tripId":"pool-1"}\n\n'));
+          controller.close();
+        }
+      })
+    }) as typeof fetch;
+    render(<TripForm />);
+
+    fireEvent.change(screen.getByLabelText("目的地"), { target: { value: "香港" } });
+    fireEvent.change(screen.getByLabelText("小红书链接"), { target: { value: "https://xhslink.com/a" } });
+    fireEvent.click(screen.getByRole("button", { name: "提取地点创建画布" }));
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+    const [, init] = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(JSON.parse(init.body).mode).toBe("pool");
+    await waitFor(() => expect(window.location.href).toBe("/trip/pool-1"));
+    global.fetch = originalFetch;
+    Object.defineProperty(window, "location", { value: originalLocation, writable: true });
   });
 
   it("shows a resumable trip link as soon as the stream sends a tripId", async () => {
@@ -69,25 +98,27 @@ describe("TripForm", () => {
     }) as typeof fetch;
     render(<TripForm />);
 
-    fireEvent.change(screen.getByPlaceholderText("香港3天2晚 city walk+美食"), { target: { value: "香港3天 city walk" } });
+    fireEvent.change(screen.getByLabelText("目的地"), { target: { value: "香港" } });
+    fireEvent.change(screen.getByLabelText("天数"), { target: { value: "3" } });
     fireEvent.change(screen.getByLabelText("小红书链接"), { target: { value: "https://xhslink.com/a" } });
-    fireEvent.click(screen.getByRole("button", { name: "生成行程" }));
+    fireEvent.click(screen.getByRole("button", { name: "帮我打包 ✦" }));
 
     const link = await screen.findByRole("link", { name: /trip-ui/ });
     expect(link).toHaveAttribute("href", "/trip/trip-ui/select");
     global.fetch = originalFetch;
   });
 
-  it("submits the manual-from-zero form to create an empty trip", async () => {
+  it("no-links path posts { destination, days } to /api/trips (empty canvas)", async () => {
     const originalFetch = global.fetch;
     const originalLocation = window.location;
     Object.defineProperty(window, "location", { value: { href: "" }, writable: true });
     global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ tripId: "manual-1" }) }) as typeof fetch;
     render(<TripForm />);
 
-    fireEvent.change(screen.getByLabelText("手动目的地"), { target: { value: "上海" } });
-    fireEvent.change(screen.getByLabelText("手动天数"), { target: { value: "2" } });
-    fireEvent.click(screen.getByRole("button", { name: "手动从零" }));
+    fireEvent.change(screen.getByLabelText("目的地"), { target: { value: "上海" } });
+    fireEvent.change(screen.getByLabelText("天数"), { target: { value: "2" } });
+    // 没链接时副按钮文案为"空白画布"
+    fireEvent.click(screen.getByRole("button", { name: "空白画布" }));
 
     await waitFor(() => expect(global.fetch).toHaveBeenCalledWith("/api/trips", expect.objectContaining({ method: "POST" })));
     expect(JSON.parse((global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body)).toEqual({ destination: "上海", days: { base: 2 } });
@@ -132,8 +163,8 @@ describe("TripPage", () => {
 
     render(await TripPage({ params: Promise.resolve({ id: "trip-page" }) }));
 
-    expect(screen.getByText("待计划池")).toBeInTheDocument();
-    expect(screen.getByText("Day 1")).toBeInTheDocument();
+    expect(screen.getAllByText(/待安排 · 3/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Day 1").length).toBeGreaterThan(0);
   });
 });
 

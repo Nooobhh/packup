@@ -20,10 +20,11 @@
 - 三抽象接口：`lib/fetchers/`（ContentFetcher）、`lib/map/`（MapProvider）、`lib/llm/`（LLMRunner），换实现不动管线
 - 中间产物：`data/trips/<id>/00~40-*.json` + 25-selection.json（选点）+ images/（gitignored，断点续跑依据）
 - 时间预算：超时常量集中 `lib/pipeline/budgets.ts`（正常路径 ≤300s 单测锁死），段超时走部分成功不炸管线
-- UI：`app/page.tsx`（输入）+ `app/trip/[id]/select`（选点，落选入池）+ `app/trip/[id]/`（工作台，组件 `components/workbench/`）
-- API 生成：`app/api/generate`（SSE）/ `POST /api/trips`（手动）/ `GET /api/pois/search`（POI 搜索）
+- UI：`app/page.tsx`（表单+3 类入口：LLM 打包/提取地点入池/空白画布）+ `app/trip/[id]/select`（选点，落选入池）+ `app/trip/[id]/`（画布，组件 `components/canvas/`；`components/workbench/` 遗留不再是入口）
+- API 生成：`app/api/generate`（SSE，body.mode=plan 默认走选点页 / mode=pool 写空 selection 直接全部落池进画布）/ `POST /api/trips`（手动，body 可带 preferences）/ `GET /api/pois/search`
 - API 行程：`app/api/trips/[id]` 及其下 candidates/selection/plan（PATCH 编辑 op 集：增删移/排程/交通/偏好）
-- 画布编辑：结构变换核心前后端共享 `lib/pipeline/plan-edit.ts`，改此处必须双端同源；守恒有测试锁定，不加永久删除 op
+- 画布编辑：结构变换核心前后端共享 `lib/pipeline/plan-edit.ts`，改此处必须双端同源；移动类 op 守恒有测试锁定，唯一永久删除入口是池卡 `pool-remove`
+- canvas 展示层每 POI 一张独立卡片/marker（不按 clusterKey 相邻聚合），pipeline 仍写 clusterKey 供 plan-edit op 校验；恢复视觉聚合改 `canvas-layout.ts:itemKey/groupAdjacent` + `map-dock.tsx:clusterMapPoints`
 
 ## 集成点
 - LLM = 路由（`router.ts`）：三段全走 pptoken 中转（gpt-5.6 多模态，`PACKUP_PPTOKEN_API_KEY`）；deepseek / claude-cli 留作备用 provider

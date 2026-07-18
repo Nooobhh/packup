@@ -10,12 +10,14 @@ import {
   moveDayGroupToPool,
   movePoolGroupToDay,
   removeDayToPool,
+  removePoolGroup,
   reorderDayGroups,
   setDayTheme
 } from "@/lib/pipeline/plan-edit";
 
 export type WorkbenchIntent =
   | { type: "place-pool-item"; poolItemId: string; day: number; index?: number }
+  | { type: "remove-pool-item"; poolItemId: string }
   | { type: "add-poi-to-pool"; poi: GroundedPoi }
   | { type: "add-poi-to-day"; poi: GroundedPoi; day: number; index?: number }
   | { type: "reorder-day"; day: number; orderedGroupIds: string[] }
@@ -38,6 +40,10 @@ export function applyIntent(plan: TripPlan, intent: WorkbenchIntent): { optimist
         const { day, index, group } = movePoolGroupToDay(optimisticPlan, intent.poolItemId, intent.day, intent.index);
         clearAffectedTransports(day.items, index, group.length);
         return { optimisticPlan, patchBody: { op: "add-item", day: intent.day, index: intent.index, poolItemId: intent.poolItemId } };
+      }
+      case "remove-pool-item": {
+        removePoolGroup(optimisticPlan, intent.poolItemId);
+        return { optimisticPlan, patchBody: { op: "pool-remove", poolItemId: intent.poolItemId } };
       }
       case "add-poi-to-day": {
         const item = itemFromPoi(intent.poi);

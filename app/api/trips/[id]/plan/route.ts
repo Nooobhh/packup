@@ -16,6 +16,7 @@ import {
   movePoolGroupToDay,
   planItemKey,
   removeDayToPool,
+  removePoolGroup,
   reorderItemsByGroupIds,
   setDayTheme
 } from "@/lib/pipeline/plan-edit";
@@ -43,6 +44,7 @@ const PatchSchema = z.discriminatedUnion("op", [
     poi: GroundedPoiSchema.optional()
   }),
   z.object({ op: z.literal("pool-add"), poi: GroundedPoiSchema }),
+  z.object({ op: z.literal("pool-remove"), poolItemId: z.string().min(1) }),
   z.object({ op: z.literal("remove-item"), day: z.number().int().positive(), itemId: z.string().min(1) }),
   z.object({
     op: z.literal("move-item"),
@@ -102,6 +104,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         break;
       case "pool-add":
         applyPoolAdd(plan, patch.data.poi);
+        break;
+      case "pool-remove":
+        removePoolGroup(plan, patch.data.poolItemId);
         break;
       case "remove-item":
         await applyRemoveItem(plan, patch.data.day, patch.data.itemId, map, fallbackTransport);

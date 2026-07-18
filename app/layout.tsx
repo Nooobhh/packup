@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
+import "lxgw-wenkai-screen-webfont/lxgwwenkaigbscreen.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Packup Trip Pipeline",
-  description: "XHS trip planning pipeline"
+  title: "packup · 行程画布",
+  description: "把收藏的小红书笔记打包成一张可拖拽的行程画布"
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

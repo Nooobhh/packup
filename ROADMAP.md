@@ -6,6 +6,7 @@
 
 ## Backlog
 <!-- 待开发功能池，按优先级倒序，置顶 = 下一步。单条目 ≤ 3 行：「优先级 + 一句话描述 + 触发线索」-->
+- P2 地点聚合（画布卡片 + 地图 marker 双侧）：画布现按每 POI 一张卡片、地图每 POI 一个 marker；恢复方案 = 真实距离 <500m 完全链 + 屏幕距离 <120px 下限，pipeline clusterKey 数据保留（canvas-layout.ts:itemKey/groupAdjacent、map-dock.tsx:clusterMapPoints 有注释起来的备用实现）。触发：卡片/marker 密度反噬体验时
 - P2 导出长图：行程导出竖版分享图（竞品仅朴素文字单，我方有地图/图片/笔记素材可超车）。触发：画布稳定后
 - P2 UI 美化阶段：工作台视觉正式化（POI 卡片配图/marker 按天着色/焦点按钮选中态/布局精修），对标圆周旅迹。触发：0.4.0 发版后
 - P1 地图 SDK 加载失败韧性：失败文案与 key 缺失区分 + script 竞态清理重试。触发：day-map SDK 失败场景
@@ -23,6 +24,7 @@
 ## Bug
 <!-- 已知 bug：「一句话描述 + 复现条件」-->
 - `npm run stage` 不加载 .env.local,报 AMAP_REST_KEY is required。复现:配好 .env.local 后直接跑 stage CLI
+- 工作台 dnd-kit SSR hydration 告警（aria-describedby 的 DndDescribedBy id 服务端/客户端不一致），仅 dev overlay 噪音不影响功能。复现:dev 模式打开 /trip/<id>
 
 ## 长期目标
 <!-- 项目愿景，bullet 形式 -->

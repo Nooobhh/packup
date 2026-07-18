@@ -105,6 +105,12 @@ export function appendItemsToPool(plan: TripPlan, items: PlanItem[]) {
   plan.pool.push(...items);
 }
 
+/** 待安排池的显式删除:唯一的永久删除入口,已排程地点必须先移回池 */
+export function removePoolGroup(plan: TripPlan, poolItemId: string) {
+  const { group, index } = takeGroupWithIndex(plan.pool, poolItemId);
+  return { group, index };
+}
+
 export function removeDayToPool(plan: TripPlan, dayNumber: number) {
   if (plan.days.length <= 1) throw new Error("至少保留一天");
   const index = dayNumber - 1;

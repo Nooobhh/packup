@@ -7,7 +7,8 @@ import { TransportPrefsSchema, TripInputSchema, TripPlanSchema } from "@/lib/pip
 const CreateTripSchema = z.object({
   destination: z.string().trim().min(1),
   days: z.object({ base: z.number().int().min(1).max(15) }),
-  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  preferences: z.array(z.string().min(1)).max(12).optional()
 });
 
 export async function POST(request: Request) {
@@ -28,6 +29,7 @@ export async function POST(request: Request) {
     destination: parsed.data.destination,
     days: { base: parsed.data.days.base },
     startDate: parsed.data.startDate,
+    preferences: parsed.data.preferences,
     transport: "public",
     pace: "moderate"
   });
