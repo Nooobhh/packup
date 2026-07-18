@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CandidatePoiSchema,
   PlanItemSchema,
+  parseTripPlan,
   SelectionSchema,
   StageEventSchema,
   TransportModeSchema,
@@ -102,6 +103,22 @@ describe("TripPlanSchema", () => {
 
     expect(parsed.pool).toEqual([]);
     expect(parsed.transportPrefs).toBeUndefined();
+  });
+
+  it("stably hydrates unique uids for legacy plan item instances", () => {
+    const legacy = {
+      days: [
+        { index: 1, items: [{ id: "hotel", poiId: "hotel", durationMin: 60 }, { id: "museum", durationMin: 60 }, { id: "hotel", poiId: "hotel", durationMin: 60 }] }
+      ],
+      pool: [{ id: "hotel", poiId: "hotel", durationMin: 60 }]
+    };
+
+    const first = parseTripPlan(legacy);
+    const second = parseTripPlan(legacy);
+
+    expect([...first.days[0].items, ...first.pool].map((item) => item.uid)).toEqual(["hotel#1", "museum#1", "hotel#2", "hotel#3"]);
+    expect(second).toEqual(first);
+    expect(legacy.days[0].items[0]).not.toHaveProperty("uid");
   });
 });
 

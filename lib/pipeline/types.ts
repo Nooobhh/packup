@@ -141,6 +141,7 @@ export const TransportToNextSchema = z.object({
 export type TransportToNext = z.infer<typeof TransportToNextSchema>;
 
 export const PlanItemSchema = z.object({
+  uid: z.string().optional(),
   id: z.string().optional(),
   poiId: z.string().optional(),
   poi: GroundedPoiSchema.optional(),
@@ -190,6 +191,28 @@ export const TripPlanSchema = z.object({
   transportPrefs: TransportPrefsSchema.optional()
 });
 export type TripPlan = z.infer<typeof TripPlanSchema>;
+
+/** 读取历史行程时按固定遍历顺序补齐实例主键,不回写用户数据。 */
+export function parseTripPlan(input: unknown): TripPlan {
+  const plan = TripPlanSchema.parse(input);
+  const items = [...plan.days.flatMap((day) => day.items), ...plan.pool];
+  const used = new Set(items.flatMap((item) => (item.uid ? [item.uid] : [])));
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    if (item.uid) continue;
+    const rawId = item.poiId ?? item.id ?? item.name ?? "item";
+    let sequence = (counts.get(rawId) ?? 0) + 1;
+    let uid = `${rawId}#${sequence}`;
+    while (used.has(uid)) {
+      sequence += 1;
+      uid = `${rawId}#${sequence}`;
+    }
+    counts.set(rawId, sequence);
+    used.add(uid);
+    item.uid = uid;
+  }
+  return plan;
+}
 
 export const ExtractOutputSchema = z.object({
   pois: z.array(CandidatePoiSchema),

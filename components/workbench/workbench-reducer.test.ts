@@ -11,7 +11,7 @@ describe("applyIntent", () => {
     expect(placed.optimisticPlan.pool).toEqual([]);
     expect(placed.patchBody).toEqual({ op: "add-item", poolItemId: "pool-1", day: 1, index: 1 });
 
-    const reordered = mustApply(applyIntent(plan, { type: "reorder-day", day: 1, orderedGroupIds: ["b", "a"] }));
+    const reordered = mustApply(applyIntent(plan, { type: "reorder-day", day: 1, orderedItemIds: ["b", "a"] }));
     expect(reordered.optimisticPlan.days[0].items.map((item) => item.id)).toEqual(["b", "a"]);
     expect(reordered.patchBody).toEqual({ op: "reorder", day: 1, orderedIds: ["b", "a"] });
 
@@ -69,19 +69,20 @@ describe("applyIntent", () => {
     expect(moved.optimisticPlan.days.map((day) => day.items.map((item) => item.id))).toEqual([["b"], ["c", "a"]]);
     expect(moved.patchBody).toEqual({ op: "move-item", fromDay: 1, toDay: 2, itemId: "a", toIndex: 1 });
 
-    const reordered = mustApply(applyIntent(plan, { type: "reorder-day", day: 1, orderedGroupIds: ["b", "a"] }));
+    const reordered = mustApply(applyIntent(plan, { type: "reorder-day", day: 1, orderedItemIds: ["b", "a"] }));
     expect(reordered.optimisticPlan.days[0].items.map((item) => item.id)).toEqual(["b", "a"]);
     expect(reordered.patchBody).toEqual({ op: "reorder", day: 1, orderedIds: ["b", "a"] });
   });
 
-  it("moves adjacent cluster groups as a unit", () => {
+  it("moves only the selected instance when adjacent items share a cluster", () => {
     const plan = samplePlan();
     plan.days[0].items[0].clusterKey = "cluster";
     plan.days[0].items[1].clusterKey = "cluster";
 
-    const result = applyIntent(plan, { type: "return-item-to-pool", day: 1, itemId: "cluster" });
+    const result = applyIntent(plan, { type: "return-item-to-pool", day: 1, itemId: "a" });
 
-    expect("optimisticPlan" in result && result.optimisticPlan.pool.map((item) => item.id)).toEqual(["pool-1", "a", "b"]);
+    expect("optimisticPlan" in result && result.optimisticPlan.days[0].items.map((item) => item.id)).toEqual(["b"]);
+    expect("optimisticPlan" in result && result.optimisticPlan.pool.map((item) => item.id)).toEqual(["pool-1", "a"]);
   });
 
   it("preserves the item multiset for legal non-growth intent sequences and does not mutate input", () => {
@@ -126,7 +127,7 @@ function samplePlan(): TripPlan {
 }
 
 function item(id: string) {
-  return { id, poiId: id, name: id, durationMin: 60, location: { lng: 121, lat: 31 } };
+  return { uid: id, id, poiId: id, name: id, durationMin: 60, location: { lng: 121, lat: 31 } };
 }
 
 function groundedPoi(id: string) {

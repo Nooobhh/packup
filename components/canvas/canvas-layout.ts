@@ -45,13 +45,13 @@ export type CanvasPersist = {
 };
 
 /**
- * 条目主键:直接用 item 自身 id,不走 clusterKey 短路。
+ * 条目主键:优先用实例 uid,不走 clusterKey 短路。
  * clusterKey 是 pipeline 阶段的"相邻同区聚成一张卡"语义,画布展开为每 POI 一张独立卡片,
- * clusterKey 保留在数据里供 plan-edit / pipeline op 校验用,但不再影响画布/地图渲染主键。
+ * clusterKey 保留在数据里供 pipeline 使用,但不再影响画布/地图渲染与编辑主键。
  * 未来若恢复卡片聚合,把这里改回 `item.clusterKey ?? ...` 即可。
  */
 export function itemKey(item: PlanItem): string {
-  return item.id ?? item.poiId ?? item.name ?? "";
+  return item.uid ?? item.id ?? item.poiId ?? item.name ?? "";
 }
 
 /** 稳定字符串 hash → [0,1) ,用于伪随机旋转/散布(SSR 安全) */
@@ -107,7 +107,7 @@ export type ItemGroup = { id: string; index: number; items: PlanItem[] };
 
 /**
  * 每 item 一组(不再按 clusterKey 相邻合并)。
- * pipeline 阶段仍会给相邻同区 POI 打 clusterKey,plan-edit 的 op 校验会用,画布展示层不再看。
+ * pipeline 阶段仍会给相邻同区 POI 打 clusterKey,画布展示层与编辑操作不再看。
  * 未来恢复卡片聚合时,改回 `if (last && item.clusterKey && last.id === item.clusterKey) last.items.push(item)` 即可。
  */
 export function groupAdjacent(items: PlanItem[]): ItemGroup[] {

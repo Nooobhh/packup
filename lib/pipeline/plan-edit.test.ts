@@ -1,73 +1,88 @@
 import { describe, expect, it } from "vitest";
 import {
-  moveDayGroupToDay,
-  moveDayGroupToPool,
-  movePoolGroupToDay,
-  reorderDayGroups,
-  snapInsertionIndex
+  moveDayItemToDay,
+  moveDayItemToPool,
+  movePoolItemToDay,
+  removePoolItem,
+  reorderDayItems
 } from "./plan-edit";
 import type { PlanItem, TripPlan } from "./types";
 
 describe("plan-edit shared structural operations", () => {
-  it("moves a pool group into a day and snaps insertion indexes to cluster boundaries", () => {
+  it("moves one pool item into the requested item index", () => {
     const plan = samplePlan();
 
-    const result = movePoolGroupToDay(plan, "pool-cluster", 1, 2);
+    const result = movePoolItemToDay(plan, "pool-a", 1, 2);
 
-    expect(result.index).toBe(3);
-    expect(plan.days[0].items.map((item) => item.id)).toEqual(["a", "b1", "b2", "p1", "p2", "c"]);
-    expect(plan.pool.map((item) => item.id)).toEqual(["loose"]);
-    expect(itemIds(plan)).toEqual(["a", "b1", "b2", "c", "d", "loose", "p1", "p2"]);
+    expect(result.index).toBe(2);
+    expect(plan.days[0].items.map((item) => item.uid)).toEqual(["a", "hotel-out", "pool-a", "x", "hotel-back"]);
+    expect(plan.pool.map((item) => item.uid)).toEqual(["pool-b"]);
+    expect(itemUids(plan)).toEqual(["a", "hotel-back", "hotel-out", "pool-a", "pool-b", "x"]);
   });
 
-  it("moves day groups to pool and across days without changing the item multiset", () => {
-    const plan = samplePlan();
-    const initial = itemIds(plan);
+  it("moves only one of two adjacent instances of the same POI to the pool", () => {
+    const plan = samplePlan({ adjacentHotels: true });
 
-    const removed = moveDayGroupToPool(plan, 1, "cluster-b");
-    const moved = moveDayGroupToDay(plan, 2, 1, "d", 1);
+    const removed = moveDayItemToPool(plan, 1, "hotel-out");
 
-    expect(removed.group.map((item) => item.id)).toEqual(["b1", "b2"]);
-    expect(moved.index).toBe(1);
-    expect(plan.days[0].items.map((item) => item.id)).toEqual(["a", "d", "c"]);
-    expect(plan.pool.map((item) => item.id)).toEqual(["loose", "p1", "p2", "b1", "b2"]);
-    expect(itemIds(plan)).toEqual(initial);
+    expect(removed.item.uid).toBe("hotel-out");
+    expect(plan.days[0].items.map((item) => item.uid)).toEqual(["a", "hotel-back", "x"]);
+    expect(plan.pool.map((item) => item.uid)).toEqual(["pool-a", "pool-b", "hotel-out"]);
   });
 
-  it("reorders days by adjacent cluster groups", () => {
+  it("edits non-adjacent instances of the same POI without cluster segment errors", () => {
     const plan = samplePlan();
 
-    reorderDayGroups(plan, 1, ["c", "cluster-b", "a"]);
+    const moved = moveDayItemToDay(plan, 1, 2, "hotel-back", 0);
 
-    expect(plan.days[0].items.map((item) => item.id)).toEqual(["c", "b1", "b2", "a"]);
+    expect(moved.item.uid).toBe("hotel-back");
+    expect(plan.days[0].items.map((item) => item.uid)).toEqual(["a", "hotel-out", "x"]);
+    expect(plan.days[1].items.map((item) => item.uid)).toEqual(["hotel-back"]);
+    expect(itemUids(plan)).toEqual(["a", "hotel-back", "hotel-out", "pool-a", "pool-b", "x"]);
   });
 
-  it("snaps only indexes inside a multi-item cluster", () => {
-    const items = samplePlan().days[0].items;
+  it("permanently removes only the selected pool instance", () => {
+    const plan = samplePlan();
+    plan.pool = [hotel("pool-hotel-1"), hotel("pool-hotel-2")];
 
-    expect(snapInsertionIndex(items, 0)).toBe(0);
-    expect(snapInsertionIndex(items, 2)).toBe(3);
-    expect(snapInsertionIndex(items, 3)).toBe(3);
-    expect(snapInsertionIndex(items, undefined)).toBe(4);
+    removePoolItem(plan, "pool-hotel-1");
+
+    expect(plan.pool.map((item) => item.uid)).toEqual(["pool-hotel-2"]);
+  });
+
+  it("reorders by instance uid without changing the item multiset", () => {
+    const plan = samplePlan();
+    const initial = itemUids(plan);
+
+    reorderDayItems(plan, 1, ["hotel-back", "x", "hotel-out", "a"]);
+
+    expect(plan.days[0].items.map((item) => item.uid)).toEqual(["hotel-back", "x", "hotel-out", "a"]);
+    expect(itemUids(plan)).toEqual(initial);
   });
 });
 
-function samplePlan(): TripPlan {
+function samplePlan({ adjacentHotels = false }: { adjacentHotels?: boolean } = {}): TripPlan {
+  const out = hotel("hotel-out");
+  const back = hotel("hotel-back");
   return {
     days: [
-      { index: 1, items: [item("a"), { ...item("b1"), clusterKey: "cluster-b" }, { ...item("b2"), clusterKey: "cluster-b" }, item("c")] },
-      { index: 2, items: [item("d")] }
+      { index: 1, items: adjacentHotels ? [item("a"), out, back, item("x")] : [item("a"), out, item("x"), back] },
+      { index: 2, items: [] }
     ],
-    pool: [item("loose"), { ...item("p1"), clusterKey: "pool-cluster" }, { ...item("p2"), clusterKey: "pool-cluster" }],
+    pool: [item("pool-a"), item("pool-b")],
     filtered: [],
     warnings: []
   };
 }
 
-function item(id: string): PlanItem {
-  return { id, poiId: id, name: id, durationMin: 60, location: { lng: 121, lat: 31 } };
+function hotel(uid: string): PlanItem {
+  return { ...item(uid), id: "hotel-poi", poiId: "hotel-poi", name: "同一家酒店", clusterKey: "hotel-poi" };
 }
 
-function itemIds(plan: TripPlan) {
-  return [...plan.days.flatMap((day) => day.items), ...plan.pool].map((item) => item.id).sort();
+function item(uid: string): PlanItem {
+  return { uid, id: uid, poiId: uid, name: uid, durationMin: 60, location: { lng: 121, lat: 31 } };
+}
+
+function itemUids(plan: TripPlan) {
+  return [...plan.days.flatMap((day) => day.items), ...plan.pool].map((item) => item.uid).sort();
 }

@@ -300,7 +300,7 @@ export function CanvasWorkbench({ initialPlan, initialNotes, tripId }: { initial
               const at = ids.indexOf(dropCard);
               if (at >= 0) {
                 ids.splice(at, 0, current.key);
-                execute({ type: "reorder-day", day: expandedDay, orderedGroupIds: ids });
+                execute({ type: "reorder-day", day: expandedDay, orderedItemIds: ids });
               }
             }
             return;

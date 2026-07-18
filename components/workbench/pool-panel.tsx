@@ -82,7 +82,7 @@ export function PoolPanel({
       ) : null}
       <div className="mt-4 space-y-3">
         {visible.map((item) => {
-          const id = item.clusterKey ?? item.id ?? item.poiId ?? item.name ?? "";
+          const id = item.uid ?? item.id ?? item.poiId ?? item.name ?? "";
           return (
             <PoiCard
               key={id}

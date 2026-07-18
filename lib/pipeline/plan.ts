@@ -1,6 +1,7 @@
 import type { MapProvider } from "@/lib/map/types";
 import { runForStage } from "@/lib/llm/router";
 import { buildPlanPrompt, type PlanPromptPoi, type PlanViolationDetail } from "@/lib/prompts/plan";
+import { nanoid } from "nanoid";
 import { BUDGETS } from "./budgets";
 import { backtrackRatio, clusterByDistance, haversineKm } from "./geo";
 import type { FilteredItem, GroundedPoi, LngLat, PlanDay, PlanItem, Slot, TransportPrefs, TripInput, TripPlan } from "./types";
@@ -202,6 +203,7 @@ export function poolItemFromPoi(poi: GroundedPoi): PlanItem {
 
 export function planItemFromPoi(poi: GroundedPoi, slot: Slot, clusterKey: string): PlanItem {
   return {
+    uid: nanoid(12),
     id: poi.id ?? poi.amapId ?? poi.name,
     poiId: poi.id ?? poi.amapId ?? poi.name,
     poi,

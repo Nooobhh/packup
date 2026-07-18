@@ -151,6 +151,7 @@ describe("API chain workbench fixture", () => {
 
     const created = await POST_TRIP(new Request("http://test/api/trips", { method: "POST", body: JSON.stringify({ destination: "上海", days: { base: 2 } }) }));
     const { tripId } = await created.json();
+    const uids = new Map<string, string>();
 
     for (const [index, id] of ["poi-a", "poi-b", "poi-c"].entries()) {
       const res = await PATCH_PLAN(
@@ -161,10 +162,12 @@ describe("API chain workbench fixture", () => {
         { params: Promise.resolve({ id: tripId }) }
       );
       expect(res.status).toBe(200);
+      const plan = await res.json();
+      uids.set(id, plan.days[0].items.find((item: { id: string }) => item.id === id).uid);
     }
 
     expect((await PATCH_PLAN(new Request("http://test", { method: "PATCH", body: JSON.stringify({ op: "optimize-day", day: 1 }) }), { params: Promise.resolve({ id: tripId }) })).status).toBe(200);
-    expect((await PATCH_PLAN(new Request("http://test", { method: "PATCH", body: JSON.stringify({ op: "move-item", fromDay: 1, toDay: 2, itemId: "poi-b" }) }), { params: Promise.resolve({ id: tripId }) })).status).toBe(200);
+    expect((await PATCH_PLAN(new Request("http://test", { method: "PATCH", body: JSON.stringify({ op: "move-item", fromDay: 1, toDay: 2, itemId: uids.get("poi-b") }) }), { params: Promise.resolve({ id: tripId }) })).status).toBe(200);
 
     const fetched = await GET(new Request(`http://test/api/trips/${tripId}`), { params: Promise.resolve({ id: tripId }) });
     const payload = await fetched.json();
@@ -264,11 +267,12 @@ describe("PATCH /api/trips/[id]/plan", () => {
     const route = vi.fn().mockResolvedValue({ durationMin: 10, distanceKm: 1 });
     (globalThis as typeof globalThis & { __packupPatchMapForTest?: unknown }).__packupPatchMapForTest = { route };
 
-    const res = await PATCH_PLAN(new Request("http://test", { method: "PATCH", body: JSON.stringify({ op: "reorder", day: 1, orderedIds: ["c1", "x", "y"] }) }), { params: Promise.resolve({ id: "trip-patch-cluster" }) });
+    const res = await PATCH_PLAN(new Request("http://test", { method: "PATCH", body: JSON.stringify({ op: "reorder", day: 1, orderedIds: ["a#1", "b#1", "x#1", "y#1"] }) }), { params: Promise.resolve({ id: "trip-patch-cluster" }) });
     const saved = JSON.parse(await readFile(path.join(dataRoot, "trip-patch-cluster", "40-plan.json"), "utf8"));
 
-    expect(res.status).toBe(400);
-    expect(saved.days[0].items.map((item: { id: string }) => item.id)).toEqual(["a", "x", "b", "y"]);
+    expect(res.status).toBe(200);
+    expect(saved.days[0].items.map((item: { id: string }) => item.id)).toEqual(["a", "b", "x", "y"]);
+    expect(saved.days[0].items.map((item: { uid: string }) => item.uid)).toEqual(["a#1", "b#1", "x#1", "y#1"]);
   });
 
   it("returns 409 without overwriting when the plan changes during patch", async () => {
@@ -308,6 +312,7 @@ describe("GET /api/trips/[id]", () => {
     const json = await res.json();
     expect(res.status).toBe(200);
     expect(json.input.destination).toBe("上海");
+    expect(json.plan.days[0].items[0].uid).toBe("外滩#1");
     expect(json.failedLinks).toEqual([
       { url: "u1", reason: "fetch fail" },
       { url: "u2", reason: "extract fail" }
@@ -316,6 +321,7 @@ describe("GET /api/trips/[id]", () => {
       { id: "n1", title: "", url: "u1", body: "" },
       { id: "n2", title: "ok", url: "u2", body: "ok" }
     ]);
+    expect(JSON.parse(await readFile(path.join(dataRoot, "trip-ok", "40-plan.json"), "utf8")).days[0].items[0].uid).toBeUndefined();
   });
 
   it("returns empty notes when notes file is missing", async () => {
@@ -365,6 +371,7 @@ async function writePatchTrip(id: string) {
   await mkdir(dir, { recursive: true });
   await writeFile(path.join(dir, "40-plan.json"), JSON.stringify({
     days: [{ index: 1, items: ["p1", "p2", "p3", "p4"].map((id, index) => ({
+      uid: id,
       id,
       poiId: id,
       name: id,

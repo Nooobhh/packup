@@ -1,17 +1,18 @@
 import type { GroundedPoi, PlanItem, TransportMode, TransportPrefs, TripPlan } from "@/lib/pipeline/types";
+import { nanoid } from "nanoid";
 import {
   addEmptyDay,
   addItemToDay,
   appendItemsToPool,
   clonePlan,
   dayAt,
-  findGroup,
-  moveDayGroupToDay,
-  moveDayGroupToPool,
-  movePoolGroupToDay,
+  findItem,
+  moveDayItemToDay,
+  moveDayItemToPool,
+  movePoolItemToDay,
   removeDayToPool,
-  removePoolGroup,
-  reorderDayGroups,
+  removePoolItem,
+  reorderDayItems,
   setDayTheme
 } from "@/lib/pipeline/plan-edit";
 
@@ -20,7 +21,7 @@ export type WorkbenchIntent =
   | { type: "remove-pool-item"; poolItemId: string }
   | { type: "add-poi-to-pool"; poi: GroundedPoi }
   | { type: "add-poi-to-day"; poi: GroundedPoi; day: number; index?: number }
-  | { type: "reorder-day"; day: number; orderedGroupIds: string[] }
+  | { type: "reorder-day"; day: number; orderedItemIds: string[] }
   | { type: "move-day-item"; fromDay: number; toDay: number; itemId: string; toIndex?: number }
   | { type: "return-item-to-pool"; day: number; itemId: string }
   | { type: "edit-item"; day: number; itemId: string; set: { note?: string; startTime?: string; durationMin?: number } }
@@ -37,12 +38,12 @@ export function applyIntent(plan: TripPlan, intent: WorkbenchIntent): { optimist
   try {
     switch (intent.type) {
       case "place-pool-item": {
-        const { day, index, group } = movePoolGroupToDay(optimisticPlan, intent.poolItemId, intent.day, intent.index);
-        clearAffectedTransports(day.items, index, group.length);
+        const { day, index } = movePoolItemToDay(optimisticPlan, intent.poolItemId, intent.day, intent.index);
+        clearAffectedTransports(day.items, index, 1);
         return { optimisticPlan, patchBody: { op: "add-item", day: intent.day, index: intent.index, poolItemId: intent.poolItemId } };
       }
       case "remove-pool-item": {
-        removePoolGroup(optimisticPlan, intent.poolItemId);
+        removePoolItem(optimisticPlan, intent.poolItemId);
         return { optimisticPlan, patchBody: { op: "pool-remove", poolItemId: intent.poolItemId } };
       }
       case "add-poi-to-day": {
@@ -57,27 +58,27 @@ export function applyIntent(plan: TripPlan, intent: WorkbenchIntent): { optimist
         return { optimisticPlan, patchBody: { op: "pool-add", poi: intent.poi } };
       }
       case "reorder-day": {
-        const day = reorderDayGroups(optimisticPlan, intent.day, intent.orderedGroupIds);
+        const day = reorderDayItems(optimisticPlan, intent.day, intent.orderedItemIds);
         day.items.forEach((item) => {
           item.transportToNext = undefined;
         });
-        return { optimisticPlan, patchBody: { op: "reorder", day: intent.day, orderedIds: intent.orderedGroupIds } };
+        return { optimisticPlan, patchBody: { op: "reorder", day: intent.day, orderedIds: intent.orderedItemIds } };
       }
       case "move-day-item": {
-        const { fromDay, toDay, group, fromIndex, index } = moveDayGroupToDay(optimisticPlan, intent.fromDay, intent.toDay, intent.itemId, intent.toIndex);
+        const { fromDay, toDay, fromIndex, index } = moveDayItemToDay(optimisticPlan, intent.fromDay, intent.toDay, intent.itemId, intent.toIndex);
         clearAffectedTransports(fromDay.items, Math.max(0, fromIndex - 1), 1);
-        clearAffectedTransports(toDay.items, index, group.length);
+        clearAffectedTransports(toDay.items, index, 1);
         return { optimisticPlan, patchBody: { op: "move-item", fromDay: intent.fromDay, toDay: intent.toDay, itemId: intent.itemId, toIndex: intent.toIndex } };
       }
       case "return-item-to-pool": {
-        moveDayGroupToPool(optimisticPlan, intent.day, intent.itemId);
+        moveDayItemToPool(optimisticPlan, intent.day, intent.itemId);
         return { optimisticPlan, patchBody: { op: "remove-item", day: intent.day, itemId: intent.itemId } };
       }
       case "edit-item": {
         if (Object.keys(intent.set).length === 0) throw new Error("set 至少提供一个字段");
-        const group = findGroup(dayAt(optimisticPlan, intent.day).items, intent.itemId);
-        if (!group) throw new Error("itemId 不存在");
-        group.items.forEach((item) => Object.assign(item, intent.set));
+        const found = findItem(dayAt(optimisticPlan, intent.day).items, intent.itemId);
+        if (!found) throw new Error("itemId 不存在");
+        Object.assign(found.item, intent.set);
         return { optimisticPlan, patchBody: { op: "update-item", day: intent.day, itemId: intent.itemId, set: intent.set } };
       }
       case "add-day":
@@ -127,6 +128,7 @@ function clearAffectedTransports(items: PlanItem[], index: number, groupLength: 
 function itemFromPoi(poi: GroundedPoi): PlanItem {
   const id = poi.id ?? poi.amapId ?? poi.name;
   return {
+    uid: nanoid(12),
     id,
     poiId: id,
     poi,

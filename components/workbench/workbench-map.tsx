@@ -113,7 +113,7 @@ function pointFromItem(item: PlanItem): MapPoint | undefined {
   const location = itemLocation(item);
   if (!location) return undefined;
   return {
-    id: item.clusterKey ?? item.id ?? item.poiId ?? item.name ?? `${location.lng},${location.lat}`,
+    id: item.uid ?? item.id ?? item.poiId ?? item.name ?? `${location.lng},${location.lat}`,
     name: item.name ?? item.poi?.name ?? "",
     location
   };

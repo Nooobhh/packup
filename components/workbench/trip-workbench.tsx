@@ -95,8 +95,8 @@ export function TripWorkbench({ initialPlan, initialNotes, tripId }: { initialPl
     }
     if (active?.origin === "day" && over.target === "day") {
       if (active.day === over.day) {
-        const orderedGroupIds = reorderGroupIds(plan, active.day, itemId, over.index);
-        if (orderedGroupIds) void execute({ type: "reorder-day", day: active.day, orderedGroupIds });
+        const orderedItemIds = reorderItemIds(plan, active.day, itemId, over.index);
+        if (orderedItemIds) void execute({ type: "reorder-day", day: active.day, orderedItemIds });
       } else {
         void execute({ type: "move-day-item", fromDay: active.day, toDay: over.day, itemId, toIndex: over.index });
       }
@@ -228,41 +228,27 @@ function groundedFromAmap(poi: AmapPoi): GroundedPoi {
 }
 
 function findItem(plan: TripPlan, id: string) {
-  return [...plan.days.flatMap((day) => day.items), ...plan.pool].find((item) => (item.clusterKey ?? item.id ?? item.poiId ?? item.name) === id);
+  return [...plan.days.flatMap((day) => day.items), ...plan.pool].find((item) => itemKey(item) === id);
 }
 
 function itemSourceNoteId(item: ReturnType<typeof findItem>) {
   return item?.poi?.sourceNoteId ?? (item as { sourceNoteId?: string } | undefined)?.sourceNoteId;
 }
 
-function reorderGroupIds(plan: TripPlan, dayNumber: number, itemId: string, targetItemIndex: number | undefined) {
+function reorderItemIds(plan: TripPlan, dayNumber: number, itemId: string, targetItemIndex: number | undefined) {
   const day = plan.days[dayNumber - 1];
   if (!day) return undefined;
-  const groups = groupAdjacent(day.items);
-  const activeIndex = groups.findIndex((group) => group.id === itemId || group.items.some((item) => rawItemId(item) === itemId));
+  const ordered = day.items.map(itemKey);
+  const activeIndex = ordered.indexOf(itemId);
   if (activeIndex < 0) return undefined;
-  const itemIndex = targetItemIndex ?? day.items.length;
-  let targetGroupIndex = groups.filter((group) => group.index < itemIndex).length;
-  if (targetGroupIndex > activeIndex) targetGroupIndex -= 1;
-  const ordered = groups.map((group) => group.id);
+  let targetIndex = targetItemIndex ?? day.items.length;
+  if (targetIndex > activeIndex) targetIndex -= 1;
   const [activeId] = ordered.splice(activeIndex, 1);
-  ordered.splice(targetGroupIndex, 0, activeId);
-  if (ordered.every((id, index) => id === groups[index].id)) return undefined;
+  ordered.splice(targetIndex, 0, activeId);
+  if (ordered.every((id, index) => id === itemKey(day.items[index]))) return undefined;
   return ordered;
 }
 
-function groupAdjacent(items: TripPlan["days"][number]["items"]) {
-  const groups: Array<{ id: string; index: number; items: TripPlan["days"][number]["items"] }> = [];
-  for (let index = 0; index < items.length; index++) {
-    const item = items[index];
-    const id = item.clusterKey ?? rawItemId(item);
-    const last = groups.at(-1);
-    if (last && item.clusterKey && last.id === item.clusterKey) last.items.push(item);
-    else groups.push({ id, index, items: [item] });
-  }
-  return groups;
-}
-
-function rawItemId(item: TripPlan["days"][number]["items"][number]) {
-  return item.poiId ?? item.id ?? item.name ?? "";
+function itemKey(item: TripPlan["days"][number]["items"][number]) {
+  return item.uid ?? item.id ?? item.poiId ?? item.name ?? "";
 }

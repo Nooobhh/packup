@@ -27,7 +27,7 @@ export function PoiCard({
   const [durationMin, setDurationMin] = useState(String(item.durationMin));
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: dragId,
-    data: { origin, itemId: item.clusterKey ?? item.id ?? item.poiId ?? item.name, ...dragData }
+    data: { origin, itemId: item.uid ?? item.id ?? item.poiId ?? item.name, ...dragData }
   });
   const style = transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : undefined;
 

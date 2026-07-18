@@ -117,47 +117,47 @@ describe("PATCH /api/trips/[id]/plan canvas ops", () => {
     expect(multiset(await readPlan("trip-conserve"))).toEqual(initial);
   });
 
-  it("preserves multi-item cluster groups when removing a day item to the pool", async () => {
+  it("moves only the selected item to the pool when adjacent items share a cluster", async () => {
     await writePlan("trip-cluster-remove", clusteredPlan());
     setPatchMap(vi.fn().mockResolvedValue({ durationMin: 5, distanceKm: 1 }));
     const initial = multiset(await readPlan("trip-cluster-remove"));
 
-    const res = await patch("trip-cluster-remove", { op: "remove-item", day: 1, itemId: "cluster-k" });
+    const res = await patch("trip-cluster-remove", { op: "remove-item", day: 1, itemId: "g2a" });
     const plan = await res.json();
 
     expect(res.status).toBe(200);
-    expect(plan.days[0].items.map((entry: Item) => entry.id)).toEqual(["g1", "x", "y"]);
-    expect(plan.pool.map((entry: Item) => entry.id)).toEqual(["p0", "pca", "pcb", "g2a", "g2b"]);
+    expect(plan.days[0].items.map((entry: Item) => entry.id)).toEqual(["g1", "g2b", "x", "y"]);
+    expect(plan.pool.map((entry: Item) => entry.id)).toEqual(["p0", "pca", "pcb", "g2a"]);
     expect(multiset(plan)).toEqual(initial);
     expect(await readPlan("trip-cluster-remove")).toEqual(plan);
   });
 
-  it("preserves multi-item cluster groups when moving across days", async () => {
+  it("moves only the selected item across days when adjacent items share a cluster", async () => {
     await writePlan("trip-cluster-move", clusteredPlan());
     setPatchMap(vi.fn().mockResolvedValue({ durationMin: 5, distanceKm: 1 }));
     const initial = multiset(await readPlan("trip-cluster-move"));
 
-    const res = await patch("trip-cluster-move", { op: "move-item", fromDay: 1, toDay: 2, itemId: "cluster-k", toIndex: 0 });
+    const res = await patch("trip-cluster-move", { op: "move-item", fromDay: 1, toDay: 2, itemId: "g2a", toIndex: 0 });
     const plan = await res.json();
 
     expect(res.status).toBe(200);
-    expect(plan.days[0].items.map((entry: Item) => entry.id)).toEqual(["g1", "x", "y"]);
-    expect(plan.days[1].items.map((entry: Item) => entry.id)).toEqual(["g2a", "g2b", "d2"]);
+    expect(plan.days[0].items.map((entry: Item) => entry.id)).toEqual(["g1", "g2b", "x", "y"]);
+    expect(plan.days[1].items.map((entry: Item) => entry.id)).toEqual(["g2a", "d2"]);
     expect(multiset(plan)).toEqual(initial);
     expect(await readPlan("trip-cluster-move")).toEqual(plan);
   });
 
-  it("preserves multi-item cluster groups when adding from pool to a day", async () => {
+  it("adds only the selected pool item to a day when adjacent pool items share a cluster", async () => {
     await writePlan("trip-cluster-add", clusteredPlan());
     setPatchMap(vi.fn().mockResolvedValue({ durationMin: 5, distanceKm: 1 }));
     const initial = multiset(await readPlan("trip-cluster-add"));
 
-    const res = await patch("trip-cluster-add", { op: "add-item", day: 1, index: 1, poolItemId: "pool-cluster" });
+    const res = await patch("trip-cluster-add", { op: "add-item", day: 1, index: 1, poolItemId: "pca" });
     const plan = await res.json();
 
     expect(res.status).toBe(200);
-    expect(plan.days[0].items.map((entry: Item) => entry.id)).toEqual(["g1", "pca", "pcb", "g2a", "g2b", "x", "y"]);
-    expect(plan.pool.map((entry: Item) => entry.id)).toEqual(["p0"]);
+    expect(plan.days[0].items.map((entry: Item) => entry.id)).toEqual(["g1", "pca", "g2a", "g2b", "x", "y"]);
+    expect(plan.pool.map((entry: Item) => entry.id)).toEqual(["p0", "pcb"]);
     expect(multiset(plan)).toEqual(initial);
     expect(await readPlan("trip-cluster-add")).toEqual(plan);
   });
@@ -180,19 +180,19 @@ describe("PATCH /api/trips/[id]/plan canvas ops", () => {
     expect(await readPlan("trip-pool-add")).toEqual(plan);
   });
 
-  it("removes a pool group permanently as the only deletion path and rejects unknown ids", async () => {
+  it("removes one pool item permanently as the only deletion path and rejects unknown ids", async () => {
     await writePlan("trip-pool-remove", clusteredPlan());
     const route = vi.fn().mockResolvedValue({ durationMin: 5, distanceKm: 1 });
     setPatchMap(route);
     const initial = multiset(await readPlan("trip-pool-remove"));
 
-    const res = await patch("trip-pool-remove", { op: "pool-remove", poolItemId: "pool-cluster" });
+    const res = await patch("trip-pool-remove", { op: "pool-remove", poolItemId: "pca" });
     const plan = await res.json();
 
     expect(res.status).toBe(200);
     expect(route).not.toHaveBeenCalled();
-    expect(plan.pool.map((entry: Item) => entry.id)).toEqual(["p0"]);
-    expect(multiset(plan)).toEqual(initial.filter((id) => id !== "pca" && id !== "pcb"));
+    expect(plan.pool.map((entry: Item) => entry.id)).toEqual(["p0", "pcb"]);
+    expect(multiset(plan)).toEqual(initial.filter((id) => id !== "pca"));
     expect(await readPlan("trip-pool-remove")).toEqual(plan);
 
     const bad = await patch("trip-pool-remove", { op: "pool-remove", poolItemId: "nope" });
@@ -200,16 +200,16 @@ describe("PATCH /api/trips/[id]/plan canvas ops", () => {
     expect(await readPlan("trip-pool-remove")).toEqual(plan);
   });
 
-  it("snaps add-item and move-item insertion indexes out of multi-item cluster interiors", async () => {
+  it("inserts add-item and move-item at exact item indexes inside shared clusters", async () => {
     await writePlan("trip-snap-add", clusteredPlan());
     setPatchMap(vi.fn().mockResolvedValue({ durationMin: 5, distanceKm: 1 }));
 
     let initial = multiset(await readPlan("trip-snap-add"));
-    let res = await patch("trip-snap-add", { op: "add-item", day: 1, index: 2, poolItemId: "pool-cluster" });
+    let res = await patch("trip-snap-add", { op: "add-item", day: 1, index: 2, poolItemId: "pca" });
     let plan = await res.json();
 
     expect(res.status).toBe(200);
-    expect(plan.days[0].items.map((entry: Item) => entry.id)).toEqual(["g1", "g2a", "g2b", "pca", "pcb", "x", "y"]);
+    expect(plan.days[0].items.map((entry: Item) => entry.id)).toEqual(["g1", "g2a", "pca", "g2b", "x", "y"]);
     expect(multiset(plan)).toEqual(initial);
 
     await writePlan("trip-snap-move", clusteredPlan());
@@ -218,7 +218,7 @@ describe("PATCH /api/trips/[id]/plan canvas ops", () => {
     plan = await res.json();
 
     expect(res.status).toBe(200);
-    expect(plan.days[0].items.map((entry: Item) => entry.id)).toEqual(["g1", "g2a", "g2b", "d2", "x", "y"]);
+    expect(plan.days[0].items.map((entry: Item) => entry.id)).toEqual(["g1", "g2a", "d2", "g2b", "x", "y"]);
     expect(multiset(plan)).toEqual(initial);
   });
 
@@ -293,7 +293,7 @@ describe("PATCH /api/trips/[id]/plan canvas ops", () => {
   });
 });
 
-type Item = { id: string; poiId?: string; transportToNext?: unknown };
+type Item = { uid: string; id: string; poiId?: string; transportToNext?: unknown };
 
 async function patch(id: string, body: unknown) {
   return PATCH(new Request("http://test", { method: "PATCH", body: JSON.stringify(body) }), { params: Promise.resolve({ id }) });
@@ -341,6 +341,7 @@ function clusteredPlan() {
 
 function item(id: string, lng: number) {
   return {
+    uid: id,
     id,
     poiId: id,
     name: id,

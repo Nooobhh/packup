@@ -33,7 +33,7 @@ export function DayLane({
 }) {
   const [theme, setTheme] = useState(day.theme ?? "");
   const { setNodeRef, isOver } = useDroppable({ id: `day:${dayNumber}`, data: { target: "day", day: dayNumber, index: day.items.length } });
-  const ids = day.items.map((item) => item.clusterKey ?? item.id ?? item.poiId ?? item.name ?? "");
+  const ids = day.items.map((item) => item.uid ?? item.id ?? item.poiId ?? item.name ?? "");
 
   return (
     <section ref={setNodeRef} className={`flex min-w-80 flex-col border-r bg-background p-4 ${isOver ? "bg-secondary/40" : ""}`}>
@@ -57,7 +57,7 @@ export function DayLane({
         <div className="mt-4 space-y-3">
           <DayDropZone day={dayNumber} index={0} />
           {day.items.map((item, index) => {
-            const id = item.clusterKey ?? item.id ?? item.poiId ?? item.name ?? "";
+            const id = item.uid ?? item.id ?? item.poiId ?? item.name ?? "";
             return (
               <React.Fragment key={`${id}-${index}`}>
                 <PoiCard

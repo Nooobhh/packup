@@ -10,94 +10,63 @@ export function dayAt(plan: TripPlan, dayNumber: number) {
   return day;
 }
 
-export function groupAdjacent(items: PlanItem[]) {
-  const groups: Array<{ id: string; index: number; items: PlanItem[] }> = [];
-  const seen = new Set<string>();
-  for (let index = 0; index < items.length; index++) {
-    const item = items[index];
-    const id = planItemKey(item);
-    const last = groups.at(-1);
-    if (last?.id === id) {
-      last.items.push(item);
-      continue;
-    }
-    if (seen.has(id)) throw new Error("同一 clusterKey 存在非相邻分段,请先重新生成行程");
-    seen.add(id);
-    groups.push({ id, index, items: [item] });
-  }
-  return groups;
+export function findItem(items: PlanItem[], target: string) {
+  const index = items.findIndex((item) => planItemKey(item) === target);
+  return index < 0 ? undefined : { item: items[index], index };
 }
 
-export function findGroup(items: PlanItem[], target: string) {
-  for (const group of groupAdjacent(items)) {
-    if (group.id === target || group.items.some((item) => rawItemId(item) === target)) return group;
-  }
-  return undefined;
+export function takeItemWithIndex(items: PlanItem[], target: string) {
+  const found = findItem(items, target);
+  if (!found) throw new Error("itemId 不存在");
+  return { item: items.splice(found.index, 1)[0], index: found.index };
 }
 
-export function takeGroupWithIndex(items: PlanItem[], target: string) {
-  const group = findGroup(items, target);
-  if (!group) throw new Error("itemId 不存在");
-  return { group: items.splice(group.index, group.items.length), index: group.index };
-}
-
-export function snapInsertionIndex(items: PlanItem[], index: number | undefined) {
+export function insertItem(items: PlanItem[], item: PlanItem, index: number | undefined) {
   const resolved = insertionIndex(items, index);
-  for (const group of groupAdjacent(items)) {
-    if (group.items.length > 1 && resolved > group.index && resolved < group.index + group.items.length) {
-      return group.index + group.items.length;
-    }
-  }
+  items.splice(resolved, 0, item);
   return resolved;
-}
-
-export function insertGroupAtBoundary(items: PlanItem[], group: PlanItem[], index: number | undefined) {
-  const snapped = snapInsertionIndex(items, index);
-  items.splice(snapped, 0, ...group);
-  return snapped;
 }
 
 export function addItemToDay(plan: TripPlan, item: PlanItem, dayNumber: number, index: number | undefined) {
   const day = dayAt(plan, dayNumber);
-  const insertedIndex = insertGroupAtBoundary(day.items, [item], index);
-  return { day, group: [item], index: insertedIndex };
+  const insertedIndex = insertItem(day.items, item, index);
+  return { day, item, index: insertedIndex };
 }
 
-export function movePoolGroupToDay(plan: TripPlan, poolItemId: string, dayNumber: number, index: number | undefined) {
+export function movePoolItemToDay(plan: TripPlan, poolItemId: string, dayNumber: number, index: number | undefined) {
   const day = dayAt(plan, dayNumber);
-  const { group } = takeGroupWithIndex(plan.pool, poolItemId);
-  const insertedIndex = insertGroupAtBoundary(day.items, group, index);
-  return { day, group, index: insertedIndex };
+  const { item } = takeItemWithIndex(plan.pool, poolItemId);
+  const insertedIndex = insertItem(day.items, item, index);
+  return { day, item, index: insertedIndex };
 }
 
-export function moveDayGroupToPool(plan: TripPlan, dayNumber: number, itemId: string) {
+export function moveDayItemToPool(plan: TripPlan, dayNumber: number, itemId: string) {
   const day = dayAt(plan, dayNumber);
-  const { group, index } = takeGroupWithIndex(day.items, itemId);
-  clearForPool(group);
-  plan.pool.push(...group);
-  return { day, group, index };
+  const { item, index } = takeItemWithIndex(day.items, itemId);
+  clearForPool([item]);
+  plan.pool.push(item);
+  return { day, item, index };
 }
 
-export function moveDayGroupToDay(plan: TripPlan, fromDayNumber: number, toDayNumber: number, itemId: string, toIndex: number | undefined) {
+export function moveDayItemToDay(plan: TripPlan, fromDayNumber: number, toDayNumber: number, itemId: string, toIndex: number | undefined) {
   const fromDay = dayAt(plan, fromDayNumber);
   const toDay = dayAt(plan, toDayNumber);
-  const { group, index: fromIndex } = takeGroupWithIndex(fromDay.items, itemId);
-  const adjustedIndex = fromDay === toDay && toIndex !== undefined && toIndex > fromIndex ? Math.max(fromIndex, toIndex - group.length) : toIndex;
-  const index = insertGroupAtBoundary(toDay.items, group, adjustedIndex);
-  return { fromDay, toDay, group, fromIndex, index };
+  const { item, index: fromIndex } = takeItemWithIndex(fromDay.items, itemId);
+  const adjustedIndex = fromDay === toDay && toIndex !== undefined && toIndex > fromIndex ? Math.max(fromIndex, toIndex - 1) : toIndex;
+  const index = insertItem(toDay.items, item, adjustedIndex);
+  return { fromDay, toDay, item, fromIndex, index };
 }
 
-export function reorderDayGroups(plan: TripPlan, dayNumber: number, orderedIds: string[]) {
+export function reorderDayItems(plan: TripPlan, dayNumber: number, orderedIds: string[]) {
   const day = dayAt(plan, dayNumber);
-  reorderItemsByGroupIds(day.items, orderedIds);
+  reorderItemsByIds(day.items, orderedIds);
   return day;
 }
 
-export function reorderItemsByGroupIds(items: PlanItem[], orderedIds: string[]) {
-  const groups = groupAdjacent(items);
-  const byId = new Map(groups.map((group) => [group.id, group.items]));
+export function reorderItemsByIds(items: PlanItem[], orderedIds: string[]) {
+  const byId = new Map(items.map((item) => [planItemKey(item), item]));
   if (!sameMembers(orderedIds, Array.from(byId.keys()))) throw new Error("orderedIds 与当天 items 集合不一致");
-  items.splice(0, items.length, ...orderedIds.flatMap((id) => byId.get(id)!));
+  items.splice(0, items.length, ...orderedIds.map((id) => byId.get(id)!));
 }
 
 export function appendItemsToPool(plan: TripPlan, items: PlanItem[]) {
@@ -106,9 +75,8 @@ export function appendItemsToPool(plan: TripPlan, items: PlanItem[]) {
 }
 
 /** 待安排池的显式删除:唯一的永久删除入口,已排程地点必须先移回池 */
-export function removePoolGroup(plan: TripPlan, poolItemId: string) {
-  const { group, index } = takeGroupWithIndex(plan.pool, poolItemId);
-  return { group, index };
+export function removePoolItem(plan: TripPlan, poolItemId: string) {
+  return takeItemWithIndex(plan.pool, poolItemId);
 }
 
 export function removeDayToPool(plan: TripPlan, dayNumber: number) {
@@ -139,7 +107,7 @@ export function clearForPool(items: PlanItem[]) {
 }
 
 export function planItemKey(item: PlanItem) {
-  return item.clusterKey ?? rawItemId(item);
+  return item.uid ?? rawItemId(item);
 }
 
 export function rawItemId(item: PlanItem) {

@@ -333,9 +333,12 @@ describe("recommendLegTransport", () => {
   it("exports plan item and nearest cluster helpers", () => {
     const poi = gp("p1", "外滩", 121, 31);
     const planItem = planItemFromPoi(poi, "morning", "cluster-1");
+    const duplicate = planItemFromPoi(poi, "evening", "cluster-1");
     const ordered = nearestClusterOrder([item("a", 121, 31), item("b", 121.01, 31)]);
 
     expect(planItem).toMatchObject({ name: "外滩", slot: "morning", clusterKey: "cluster-1" });
+    expect(planItem.uid).toBeTruthy();
+    expect(duplicate.uid).not.toBe(planItem.uid);
     expect(ordered).toHaveLength(2);
   });
 });

@@ -1,6 +1,6 @@
 import { access, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { ExtractOutputSchema, NoteSchema, TripInputSchema, TripPlanSchema } from "@/lib/pipeline/types";
+import { ExtractOutputSchema, NoteSchema, TripInputSchema, parseTripPlan } from "@/lib/pipeline/types";
 
 export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
@@ -19,7 +19,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
   const input = TripInputSchema.parse(await readJson(path.join(dir, "00-input.json")));
   const notes = NoteSchema.array().parse(await readJson(path.join(dir, "10-notes.json")).catch(() => []));
   const extract = ExtractOutputSchema.partial().parse(await readJson(path.join(dir, "20-pois.json")).catch(() => ({})));
-  const plan = TripPlanSchema.parse(await readJson(planPath));
+  const plan = parseTripPlan(await readJson(planPath));
   const byNoteId = new Map(notes.map((note) => [note.id, note]));
   const failedLinks = [
     ...notes.filter((note) => note.fetchStatus === "failed").map((note) => ({ url: note.url, reason: note.failReason ?? "fetch failed" })),

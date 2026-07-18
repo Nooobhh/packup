@@ -10,18 +10,19 @@ import {
   addItemToDay,
   appendItemsToPool,
   dayAt,
-  findGroup,
-  moveDayGroupToDay,
-  moveDayGroupToPool,
-  movePoolGroupToDay,
+  findItem,
+  moveDayItemToDay,
+  moveDayItemToPool,
+  movePoolItemToDay,
   planItemKey,
   removeDayToPool,
-  removePoolGroup,
-  reorderItemsByGroupIds,
+  removePoolItem,
+  reorderItemsByIds,
   setDayTheme
 } from "@/lib/pipeline/plan-edit";
 import {
   GroundedPoiSchema,
+  parseTripPlan,
   TransportModeSchema,
   TransportPrefsSchema,
   TripPlanSchema,
@@ -86,7 +87,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   if (!patch.success) return Response.json({ error: "Invalid patch", issues: patch.error.issues }, { status: 400 });
 
   const originalRaw = await readFile(file, "utf8");
-  const plan = TripPlanSchema.parse(JSON.parse(originalRaw));
+  const plan = parseTripPlan(JSON.parse(originalRaw));
   await (globalThis as typeof globalThis & { __packupPatchAfterReadForTest?: (file: string) => Promise<void> | void }).__packupPatchAfterReadForTest?.(file);
   const map = getMap();
   const fallbackTransport = await readInputTransport(id);
@@ -106,7 +107,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         applyPoolAdd(plan, patch.data.poi);
         break;
       case "pool-remove":
-        removePoolGroup(plan, patch.data.poolItemId);
+        removePoolItem(plan, patch.data.poolItemId);
         break;
       case "remove-item":
         await applyRemoveItem(plan, patch.data.day, patch.data.itemId, map, fallbackTransport);
@@ -165,7 +166,7 @@ async function applyAddItem(
 ) {
   if (Boolean(patch.poolItemId) === Boolean(patch.poi)) throw new Error("poolItemId 或 poi 必须且只能提供一个");
   const result = patch.poolItemId
-    ? movePoolGroupToDay(plan, patch.poolItemId, patch.day, patch.index)
+    ? movePoolItemToDay(plan, patch.poolItemId, patch.day, patch.index)
     : addItemToDay(
         plan,
         planItemFromPoi(
@@ -176,11 +177,11 @@ async function applyAddItem(
         patch.day,
         patch.index
       );
-  await recomputeInsertion(result.day, result.index, result.group.length, map, plan.transportPrefs, fallbackTransport);
+  await recomputeInsertion(result.day, result.index, 1, map, plan.transportPrefs, fallbackTransport);
 }
 
 async function applyRemoveItem(plan: TripPlan, dayNumber: number, itemIdToRemove: string, map: Pick<MapProvider, "route">, fallbackTransport: TransportMode) {
-  const { day, index } = moveDayGroupToPool(plan, dayNumber, itemIdToRemove);
+  const { day, index } = moveDayItemToPool(plan, dayNumber, itemIdToRemove);
   await recomputeRemoval(day, index, map, plan.transportPrefs, fallbackTransport);
 }
 
@@ -193,17 +194,17 @@ async function applyMoveItem(
   map: Pick<MapProvider, "route">,
   fallbackTransport: TransportMode
 ) {
-  const { fromDay, toDay, group, fromIndex, index } = moveDayGroupToDay(plan, fromDayNumber, toDayNumber, itemIdToMove, toIndex);
+  const { fromDay, toDay, fromIndex, index } = moveDayItemToDay(plan, fromDayNumber, toDayNumber, itemIdToMove, toIndex);
   await recomputeRemoval(fromDay, fromIndex, map, plan.transportPrefs, fallbackTransport);
-  await recomputeInsertion(toDay, index, group.length, map, plan.transportPrefs, fallbackTransport);
+  await recomputeInsertion(toDay, index, 1, map, plan.transportPrefs, fallbackTransport);
 }
 
 function applyUpdateItem(plan: TripPlan, dayNumber: number, target: string, set: { note?: string; startTime?: string; durationMin?: number }) {
   if (Object.keys(set).length === 0) throw new Error("set 至少提供一个字段");
   const day = dayAt(plan, dayNumber);
-  const group = findGroup(day.items, target);
-  if (!group) throw new Error("itemId 不存在");
-  for (const item of group.items) Object.assign(item, set);
+  const found = findItem(day.items, target);
+  if (!found) throw new Error("itemId 不存在");
+  Object.assign(found.item, set);
 }
 
 function applyRemoveDay(plan: TripPlan, dayNumber: number) {
@@ -243,7 +244,7 @@ async function applyRecalcTransport(plan: TripPlan, dayNumber: number | undefine
 
 async function applyReorder(items: PlanItem[], orderedIds: string[], map: Pick<MapProvider, "route">, prefs?: TransportPrefs, fallbackTransport: TransportMode = "public") {
   const oldPair = adjacentPairMap(items);
-  reorderItemsByGroupIds(items, orderedIds);
+  reorderItemsByIds(items, orderedIds);
   await fillDayWithPairReuse({ items }, oldPair, map, prefs, fallbackTransport);
 }
 

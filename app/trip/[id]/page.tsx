@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { CanvasWorkbench } from "@/components/canvas/canvas-workbench";
 import { CanvasNotices } from "@/components/canvas/canvas-notices";
-import { NoteSchema, TripInputSchema, TripPlanSchema } from "@/lib/pipeline/types";
+import { NoteSchema, TripInputSchema, parseTripPlan } from "@/lib/pipeline/types";
 
 export default async function TripPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -42,7 +42,7 @@ async function readTripPayload(id: string) {
       readFile(path.join(dir, "20-pois.json"), "utf8").catch(() => "{}")
     ]);
     const input = TripInputSchema.parse(JSON.parse(inputRaw));
-    const plan = TripPlanSchema.parse(JSON.parse(planRaw));
+    const plan = parseTripPlan(JSON.parse(planRaw));
     const notes = NoteSchema.array().parse(JSON.parse(notesRaw));
     const pois = JSON.parse(poisRaw) as { failedNotes?: { noteId: string; reason: string }[] };
     const byNoteId = new Map(notes.map((note) => [note.id, note]));
