@@ -52,6 +52,8 @@ function itemType(item: PlanItem): string {
 export function MapDock({
   days,
   pool,
+  destination,
+  tripId,
   focus,
   selectedItemId,
   onMarkerClick,
@@ -60,6 +62,8 @@ export function MapDock({
 }: {
   days: PlanDay[];
   pool: PlanItem[];
+  destination?: string;
+  tripId?: string;
   focus: "all" | number;
   selectedItemId: string | null;
   onMarkerClick: (itemId: string) => void;
@@ -87,17 +91,25 @@ export function MapDock({
     if (!key || !ref.current) return;
     let cancelled = false;
     loadAmapSdk(key)
-      .then((AMap) => {
+      .then(async (AMap) => {
         if (cancelled || !ref.current) return;
         if (!mapRef.current) {
-          // 初始 center 直接落在行程点上,避免从默认中心(北京)长途飞行动画期间瓦片空白
+          // 初始 center 直接落在行程点上,避免从默认中心(北京)长途飞行动画期间瓦片空白。
+          // 一个点都没有(空画布/刚建好的行程)时先按目的地名查一次坐标 —— 必须在建图前拿到:
+          // 建图后再 setZoomAndCenter,零 overlay 的地图不会重绘瓦片,只会留一块空白底。
           const first = firstLocation(optsRef.current.days, optsRef.current.pool);
+          const center = first ?? (destination && tripId ? await locateDestination(tripId, destination).catch(() => undefined) : undefined);
+          if (cancelled || !ref.current) return;
           const styleId = process.env.NEXT_PUBLIC_AMAP_STYLE_ID;
           mapRef.current = new AMap.Map(ref.current, {
             zoom: 12,
-            ...(first ? { center: [first.lng, first.lat] as [number, number] } : {}),
+            ...(center ? { center: [center.lng, center.lat] as [number, number] } : {}),
             mapStyle: styleId ? `amap://styles/${styleId}` : "amap://styles/whitesmoke"
           });
+          // 零 overlay(空画布)走不到 fitManually,而 AMap v2 光有构造参数不加载瓦片,底图会一直空白。
+          // 必须补一次走动画路径的 setZoomAndCenter(immediately=true 不触发,见 fitManually 注释),
+          // 且 zoom 要与当前值不同 —— zoom 没变化 AMap 同样跳过重绘。动画可能被节流吞掉,故重试一次。
+          if (!first && center) settleEmptyMap(() => mapRef.current, [center.lng, center.lat]);
           if (process.env.NODE_ENV !== "production") (window as unknown as { __packupMap?: AMapMap }).__packupMap = mapRef.current;
           // zoom 变化后屏幕距离改变,重新聚合(点集未变不会触发 re-fit)
           mapRef.current.on?.("zoomend", () => {
@@ -114,7 +126,7 @@ export function MapDock({
     return () => {
       cancelled = true;
     };
-  }, [key, days, pool, dayFilter, selectedItemId, showPool, hiddenTypes, onMarkerClick]);
+  }, [key, days, pool, destination, tripId, dayFilter, selectedItemId, showPool, hiddenTypes, onMarkerClick]);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -537,6 +549,28 @@ function findSelectedLocation(days: PlanDay[], pool: PlanItem[], id: string): Ln
   }
   const poolItem = pool.find((item) => itemKey(item) === id);
   return poolItem?.location ?? poolItem?.poi?.location;
+}
+
+/**
+ * 把空画布地图落到目的地城市视野:zoom 在 11/12 之间交替下发,保证每次都与当前值不同,
+ * AMap 才会跑动画路径加载瓦片。与 fitManually 同款重试(动画可能被浏览器节流吞掉)。
+ */
+function settleEmptyMap(getMap: () => AMapMap | null, center: [number, number], attempt = 0) {
+  getMap()?.setZoomAndCenter?.(attempt % 2 === 0 ? 11 : 12, center, false);
+  if (attempt < 2) setTimeout(() => settleEmptyMap(getMap, center, attempt + 1), 600 + attempt * 900);
+}
+
+/**
+ * 按目的地名取一个城市级坐标:复用高德 POI 搜索,首条命中即目的地本身
+ * (搜「香港」→「香港特别行政区」)。查不到就静默放弃,地图留在默认位置。
+ */
+async function locateDestination(tripId: string, destination: string): Promise<LngLat> {
+  const response = await fetch(`/api/pois/search?tripId=${encodeURIComponent(tripId)}&q=${encodeURIComponent(destination)}`);
+  if (!response.ok) throw new Error("locate failed");
+  const results = (await response.json()) as Array<{ location?: LngLat }>;
+  const location = results[0]?.location;
+  if (!location) throw new Error("no hit");
+  return location;
 }
 
 function firstLocation(days: PlanDay[], pool: PlanItem[]) {

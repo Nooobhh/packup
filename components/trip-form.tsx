@@ -39,13 +39,28 @@ export function TripForm() {
     });
   }
 
-  const canSubmitBase = destination.trim().length > 0 && daysValid && !submitting;
-  const canGenerate = canSubmitBase && hasLinks;
-  const canEmpty = canSubmitBase;
+  /**
+   * 两个 CTA 常驻可点(仅 submitting 时禁用),缺失项在点击时以提示条说明并聚焦到该字段 ——
+   * 置灰按钮不告诉用户「差什么」,点击后给理由比让按钮变灰更好用。
+   */
+  function checkBase(): boolean {
+    if (destination.trim().length === 0) {
+      setError("请先填写城市 / 目的地");
+      document.getElementById("destination")?.focus();
+      return false;
+    }
+    if (!daysValid) {
+      setError("天数请填 1–15 之间的整数");
+      document.getElementById("days")?.focus();
+      return false;
+    }
+    return true;
+  }
 
   async function submitEmpty() {
-    if (!canEmpty) return;
+    if (submitting) return;
     setError("");
+    if (!checkBase()) return;
     setSubmitting(true);
     try {
       const prefsArr = Array.from(preferences);
@@ -69,8 +84,14 @@ export function TripForm() {
   }
 
   async function submitGenerate(mode: "plan" | "pool") {
-    if (!canGenerate) return;
+    if (submitting) return;
     setError("");
+    if (!checkBase()) return;
+    if (!hasLinks) {
+      setError(mode === "plan" ? "「打包行程」需要小红书笔记链接;没有链接就点右边开一张空画布" : "「提取地点创建画布」需要小红书笔记链接");
+      document.getElementById("links")?.focus();
+      return;
+    }
     setTripId("");
     setEvents([]);
     setSubmitting(true);
@@ -151,9 +172,9 @@ export function TripForm() {
         <form
           onSubmit={(event) => {
             event.preventDefault();
-            // 回车默认走「首个可用主 CTA」:有链接=帮我打包;无链接=空白画布
-            if (canGenerate) void submitGenerate("plan");
-            else if (canEmpty) void submitEmpty();
+            // 回车默认走「首个可用主 CTA」:有链接=打包行程;无链接=空白画布
+            if (hasLinks) void submitGenerate("plan");
+            else void submitEmpty();
           }}
           className="mt-12 space-y-6 rounded-[18px] border-[3px] border-ink bg-white p-6 hard-shadow"
         >
@@ -162,6 +183,7 @@ export function TripForm() {
             <label className="block">
               <span className="font-display text-[15px] font-bold text-ink">城市 / 目的地</span>
               <input
+                id="destination"
                 value={destination}
                 onChange={(event) => setDestination(event.target.value)}
                 placeholder="如「杭州」「香港」「东京」"
@@ -172,6 +194,7 @@ export function TripForm() {
             <label className="block">
               <span className="font-display text-[15px] font-bold text-ink">天数</span>
               <input
+                id="days"
                 type="number"
                 min={1}
                 max={15}
@@ -252,23 +275,19 @@ export function TripForm() {
             <button
               type="button"
               onClick={() => void submitGenerate("plan")}
-              disabled={!canGenerate}
+              disabled={submitting}
               className={`font-display rounded-full border-2 py-3 text-[15px] font-bold transition-transform ${
-                submitting
-                  ? "cursor-wait border-accent/70 bg-accent/70 text-white"
-                  : canGenerate
-                    ? "border-accent bg-accent text-white hover:-translate-y-0.5"
-                    : "cursor-not-allowed border-line bg-muted text-ink-soft/50"
+                submitting ? "cursor-wait border-accent/70 bg-accent/70 text-white" : "border-accent bg-accent text-white hover:-translate-y-0.5"
               }`}
             >
-              {submitting && hasLinks ? "打包中,别走开…" : "帮我打包 ✦"}
+              {submitting && hasLinks ? "打包中,别走开…" : "打包行程"}
             </button>
             <button
               type="button"
               onClick={() => (hasLinks ? void submitGenerate("pool") : void submitEmpty())}
-              disabled={submitting || !canEmpty}
+              disabled={submitting}
               className={`font-display rounded-full border-2 py-3 text-[15px] font-bold transition-transform ${
-                submitting || !canEmpty
+                submitting
                   ? "cursor-not-allowed border-line bg-muted text-ink-soft/60"
                   : "border-ink bg-white text-ink hover:bg-accent-soft hover:-translate-y-0.5"
               }`}

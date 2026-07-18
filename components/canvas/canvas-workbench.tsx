@@ -7,10 +7,6 @@ import { applyIntent, type WorkbenchIntent } from "@/components/workbench/workbe
 import {
   FOLDER_H,
   FOLDER_W,
-  POOL_ORIGIN,
-  POOL_PER_ROW,
-  POOL_ROW_H,
-  POOL_STEP_X,
   STICKER_H,
   STICKER_W,
   contentBounds,
@@ -18,9 +14,9 @@ import {
   expandedPos,
   folderPos,
   groupAdjacent,
-  itemKey,
   loadPersist,
   poolPos,
+  poolZoneRect,
   savePersist,
   type CanvasPersist,
   type ItemGroup,
@@ -417,7 +413,7 @@ export function CanvasWorkbench({ initialPlan, initialNotes, tripId }: { initial
         />
 
         {/* 待安排池区 */}
-        <PoolZone poolCount={layout.poolGroups.length} rows={Math.max(1, Math.ceil(layout.poolGroups.length / POOL_PER_ROW))} faded={expandedDay !== null} />
+        <PoolZone poolCount={layout.poolGroups.length} dayCount={plan.days.length} faded={expandedDay !== null} />
 
         {/* 展开态摊开区边界:拖出虚线框 = 移回待安排 */}
         {expandedZone && expandedDay !== null ? (
@@ -563,6 +559,8 @@ export function CanvasWorkbench({ initialPlan, initialNotes, tripId }: { initial
       <MapDock
         days={plan.days}
         pool={plan.pool}
+        destination={plan.destination}
+        tripId={tripId}
         focus={expandedDay ?? "all"}
         selectedItemId={selectedId}
         onMarkerClick={(itemId) => setSelectedId((value) => (value === itemId ? null : itemId))}
@@ -636,7 +634,7 @@ function computeLayout(plan: TripPlan, positions: Record<string, XY>, expandedDa
   });
 
   poolGroups.forEach((group, gi) => {
-    cards.push({ key: group.id, group, origin: "pool", pos: positions[group.id] ?? poolPos(gi, group.id), mode: "scatter" });
+    cards.push({ key: group.id, group, origin: "pool", pos: positions[group.id] ?? poolPos(gi, group.id, plan.days.length), mode: "scatter" });
   });
 
   return { cards, folders, poolGroups };
@@ -651,18 +649,12 @@ function expandedPosFrom(folderTopLeft: XY, index: number): XY {
 
 /* ---------- 小部件 ---------- */
 
-function PoolZone({ poolCount, rows, faded }: { poolCount: number; rows: number; faded: boolean }) {
-  const height = rows * POOL_ROW_H + 90;
+function PoolZone({ poolCount, dayCount, faded }: { poolCount: number; dayCount: number; faded: boolean }) {
+  const rect = poolZoneRect(dayCount, poolCount);
   return (
     <div
       className={`pointer-events-none absolute rounded-[20px] border-2 border-dashed transition-opacity duration-200 ${faded ? "opacity-20" : ""}`}
-      style={{
-        left: POOL_ORIGIN.x - 48,
-        top: POOL_ORIGIN.y - 70,
-        width: POOL_PER_ROW * POOL_STEP_X + 80,
-        height,
-        borderColor: "#d8d4cc"
-      }}
+      style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h, borderColor: "#d8d4cc" }}
     >
       <span className="absolute -top-4 left-6 rounded-full border border-line bg-white px-3 py-1 font-display text-[14px] font-bold text-ink hard-shadow">
         待安排 · {poolCount}

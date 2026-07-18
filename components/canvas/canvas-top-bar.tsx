@@ -42,7 +42,9 @@ export function CanvasTopBar({
     <>
       <header
         data-canvas-ui
-        className="fixed inset-x-0 top-0 z-40 flex h-14 items-center gap-3 border-b-2 border-ink bg-paper/95 px-4"
+        // 顶栏是 stacking context 根:内部搜索结果面板的 z 只在本层内生效,
+        // 顶栏本身必须高于详情抽屉(z-50)/地图(z-40),否则下拉结果会被抽屉盖住
+        className="fixed inset-x-0 top-0 z-[60] flex h-14 items-center gap-3 border-b-2 border-ink bg-paper/95 px-4"
       >
         <a href="/" className="flex items-center" aria-label="回到首页">
           <img src="/stickers/logo-wordmark.png" alt="packup" className="sticker-drop h-8 select-none" draggable={false} />
@@ -134,7 +136,7 @@ function DayToolbar({
   return (
     <div
       data-canvas-ui
-      className="fixed left-1/2 top-16 z-40 flex -translate-x-1/2 items-center gap-2 rounded-full border-2 border-ink bg-white py-1.5 pl-2 pr-1.5 hard-shadow"
+      className="fixed left-1/2 top-16 z-[55] flex -translate-x-1/2 items-center gap-2 rounded-full border-2 border-ink bg-white py-1.5 pl-2 pr-1.5 hard-shadow"
     >
       <span className="flex items-center gap-1.5 rounded-full px-2 py-0.5 font-display text-[14px] font-bold text-ink" style={{ background: dayColor(dayNumber) }}>
         Day {dayNumber}

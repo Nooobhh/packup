@@ -44,7 +44,7 @@ describe("TripForm", () => {
     fireEvent.change(screen.getByLabelText("小红书链接"), { target: { value: "hello https://xhslink.com/a and https://example.com/no" } });
     expect(screen.getByText("识别到 1 条")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "帮我打包 ✦" }));
+    fireEvent.click(screen.getByRole("button", { name: "打包行程" }));
     await waitFor(() => expect(global.fetch).toHaveBeenCalled());
     const [url, init] = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(url).toBe("/api/generate");
@@ -101,7 +101,7 @@ describe("TripForm", () => {
     fireEvent.change(screen.getByLabelText("目的地"), { target: { value: "香港" } });
     fireEvent.change(screen.getByLabelText("天数"), { target: { value: "3" } });
     fireEvent.change(screen.getByLabelText("小红书链接"), { target: { value: "https://xhslink.com/a" } });
-    fireEvent.click(screen.getByRole("button", { name: "帮我打包 ✦" }));
+    fireEvent.click(screen.getByRole("button", { name: "打包行程" }));
 
     const link = await screen.findByRole("link", { name: /trip-ui/ });
     expect(link).toHaveAttribute("href", "/trip/trip-ui/select");
@@ -125,6 +125,30 @@ describe("TripForm", () => {
     expect(window.location.href).toBe("/trip/manual-1");
     global.fetch = originalFetch;
     Object.defineProperty(window, "location", { value: originalLocation, writable: true });
+  });
+
+  it("keeps both CTAs clickable and explains what is missing instead of graying out", async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn() as typeof fetch;
+    render(<TripForm />);
+
+    // 空表单:两个按钮都可点,点了给「缺目的地」而不是静默无反应
+    const pack = screen.getByRole("button", { name: "打包行程" });
+    const blank = screen.getByRole("button", { name: "空白画布" });
+    expect(pack).toBeEnabled();
+    expect(blank).toBeEnabled();
+
+    fireEvent.click(blank);
+    expect(screen.getByText("请先填写城市 / 目的地")).toBeInTheDocument();
+    expect(global.fetch).not.toHaveBeenCalled();
+
+    // 有目的地但没链接:打包行程要提示缺链接并引导去空白画布
+    fireEvent.change(screen.getByLabelText("目的地"), { target: { value: "香港" } });
+    fireEvent.click(pack);
+    expect(screen.getByText(/需要小红书笔记链接/)).toBeInTheDocument();
+    expect(global.fetch).not.toHaveBeenCalled();
+
+    global.fetch = originalFetch;
   });
 });
 
