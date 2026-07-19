@@ -28,6 +28,11 @@ describe("applyIntent", () => {
     expect(edited.optimisticPlan.days[0].items[0]).toMatchObject({ id: "a", note: "n", startTime: "09:30", durationMin: 45 });
     expect(edited.patchBody).toEqual({ op: "update-item", day: 1, itemId: "a", set: { note: "n", startTime: "09:30", durationMin: 45 } });
 
+    // 省略 day = 改待安排池里的地点(手动添加的地点默认落池,类型纠正主要发生在这里)
+    const poolTyped = mustApply(applyIntent(plan, { type: "edit-item", itemId: "pool-1", set: { type: "sight" } }));
+    expect(poolTyped.optimisticPlan.pool[0]).toMatchObject({ id: "pool-1", type: "sight" });
+    expect(poolTyped.patchBody).toEqual({ op: "update-item", day: undefined, itemId: "pool-1", set: { type: "sight" } });
+
     const addedDay = mustApply(applyIntent(plan, { type: "add-day", theme: "新 day" }));
     expect(addedDay.optimisticPlan.days.at(-1)).toEqual({ index: 3, theme: "新 day", items: [] });
     expect(addedDay.patchBody).toEqual({ op: "add-day", theme: "新 day" });

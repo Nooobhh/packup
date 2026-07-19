@@ -2,7 +2,8 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AmapPoi } from "@/lib/map/types";
-import type { GroundedPoi, PlanItem, TransportMode, TripPlan } from "@/lib/pipeline/types";
+import { poiTypeFromAmap } from "@/lib/map/poi-type";
+import type { GroundedPoi, PlanItem, PoiType, TransportMode, TripPlan } from "@/lib/pipeline/types";
 import { applyIntent, type WorkbenchIntent } from "@/components/workbench/workbench-reducer";
 import {
   FOLDER_H,
@@ -576,9 +577,8 @@ export function CanvasWorkbench({ initialPlan, initialNotes, tripId }: { initial
           dayCount={plan.days.length}
           mapExpanded={mapExpanded}
           onClose={() => setSelectedId(null)}
-          onEdit={(set) => {
-            if (selected.dayNumber) execute({ type: "edit-item", day: selected.dayNumber, itemId: selectedId!, set });
-          }}
+          // day 省略 = 改池里的地点(手动添加的地点默认落池,类型纠正主要发生在这里)
+          onEdit={(set) => execute({ type: "edit-item", day: selected.dayNumber, itemId: selectedId!, set })}
           onReturnToPool={
             selected.dayNumber
               ? () => {
@@ -767,7 +767,8 @@ function groundedFromAmap(poi: AmapPoi): GroundedPoi {
   return {
     id: poi.amapId,
     name: poi.name,
-    type: "other",
+    // 高德分类映射;映射不到旅行语义的(地铁站/写字楼/道路名)落 other,用户可在详情抽屉改
+    type: poiTypeFromAmap(poi.typecode),
     reason: "手动添加",
     sourceNoteId: "manual",
     sourceType: "manual",

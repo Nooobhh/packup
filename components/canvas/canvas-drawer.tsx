@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { X } from "lucide-react";
-import type { PlanItem } from "@/lib/pipeline/types";
+import type { PlanItem, PoiType } from "@/lib/pipeline/types";
 import { dayColor, itemKey } from "./canvas-layout";
 import { stickerSrc } from "./poi-sticker";
 
@@ -16,6 +16,9 @@ const TYPE_LABEL: Record<string, string> = {
   experience: "体验",
   other: "地点"
 };
+
+/** 可切换的类型顺序(与地图筛选、贴纸图标同一套 6 类) */
+const TYPE_OPTIONS: PoiType[] = ["sight", "food", "shop", "stay", "experience", "other"];
 
 /** 点击贴纸卡后的详情抽屉(贴纸风) */
 export function CanvasDrawer({
@@ -37,7 +40,7 @@ export function CanvasDrawer({
   /** 地图右栏展开时,抽屉改盖在右栏下半;地图收起时占右上(地图小窗上方) */
   mapExpanded: boolean;
   onClose: () => void;
-  onEdit: (set: { note?: string; startTime?: string; durationMin?: number }) => void;
+  onEdit: (set: { note?: string; startTime?: string; durationMin?: number; type?: PoiType }) => void;
   onReturnToPool?: () => void;
   onPlaceToDay?: (day: number) => void;
   onRemove?: () => void;
@@ -105,6 +108,29 @@ export function CanvasDrawer({
       </header>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 text-sm">
+        {/* 类型:高德分类映射不到旅行语义时(地铁站/写字楼/道路名)会落「地点」,这里手动纠正。点击即生效 */}
+        <div>
+          <div className="mb-1.5 text-[12px] font-semibold text-ink-soft">类型</div>
+          <div className="flex flex-wrap gap-1.5">
+            {TYPE_OPTIONS.map((option) => {
+              const active = type === option;
+              return (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => onEdit({ type: option })}
+                  aria-pressed={active}
+                  className={`rounded-full border px-2.5 py-1 text-[12px] font-medium transition-colors ${
+                    active ? "border-ink bg-accent-soft text-accent" : "border-line bg-paper text-ink-soft hover:border-ink hover:text-ink"
+                  }`}
+                >
+                  {TYPE_LABEL[option]}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         {reason ? (
           <blockquote className="rounded-[10px] border border-line bg-paper px-3 py-2 text-[13px] leading-relaxed text-ink">“{reason}”</blockquote>
         ) : null}

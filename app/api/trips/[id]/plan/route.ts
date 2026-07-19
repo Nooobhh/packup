@@ -23,12 +23,14 @@ import {
 import {
   GroundedPoiSchema,
   parseTripPlan,
+  PoiTypeSchema,
   TransportModeSchema,
   TransportPrefsSchema,
   TripPlanSchema,
   type LngLat,
   type PlanDay,
   type PlanItem,
+  type PoiType,
   type TripPlan,
   type TransportMode,
   type TransportPrefs
@@ -56,12 +58,14 @@ const PatchSchema = z.discriminatedUnion("op", [
   }),
   z.object({
     op: z.literal("update-item"),
-    day: z.number().int().positive(),
+    /** 省略 = 改待安排池里的地点(手动添加的地点默认落池,也要能改类型) */
+    day: z.number().int().positive().optional(),
     itemId: z.string().min(1),
     set: z.object({
       note: z.string().optional(),
       startTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
-      durationMin: z.number().int().positive().optional()
+      durationMin: z.number().int().positive().optional(),
+      type: PoiTypeSchema.optional()
     })
   }),
   z.object({ op: z.literal("add-day"), theme: z.string().optional() }),
@@ -199,10 +203,15 @@ async function applyMoveItem(
   await recomputeInsertion(toDay, index, 1, map, plan.transportPrefs, fallbackTransport);
 }
 
-function applyUpdateItem(plan: TripPlan, dayNumber: number, target: string, set: { note?: string; startTime?: string; durationMin?: number }) {
+function applyUpdateItem(
+  plan: TripPlan,
+  dayNumber: number | undefined,
+  target: string,
+  set: { note?: string; startTime?: string; durationMin?: number; type?: PoiType }
+) {
   if (Object.keys(set).length === 0) throw new Error("set 至少提供一个字段");
-  const day = dayAt(plan, dayNumber);
-  const found = findItem(day.items, target);
+  const items = dayNumber === undefined ? plan.pool : dayAt(plan, dayNumber).items;
+  const found = findItem(items, target);
   if (!found) throw new Error("itemId 不存在");
   Object.assign(found.item, set);
 }

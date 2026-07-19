@@ -61,7 +61,8 @@ export class AmapRestProvider implements MapProvider {
       address: string(first.address) || undefined,
       cityName: string(first.cityname) || string(first.cityName) || undefined,
       openHours: businessField(detail, ["opentime_today", "open_time", "opentime2", "business_hours"]),
-      rating: businessField(detail, ["rating", "score"])
+      rating: businessField(detail, ["rating", "score"]),
+      typecode: string(first.typecode) || string(detail.typecode) || undefined
     };
   }
 
@@ -184,7 +185,8 @@ function poiFromRecord(poi: Record<string, unknown>, fallbackName: string): Amap
     address: string(poi.address) || undefined,
     cityName: string(poi.cityname) || string(poi.cityName) || undefined,
     openHours: businessField(poi, ["opentime_today", "open_time", "opentime2", "business_hours"]),
-    rating: businessField(poi, ["rating", "score"])
+    rating: businessField(poi, ["rating", "score"]),
+    typecode: string(poi.typecode) || undefined
   };
 }
 

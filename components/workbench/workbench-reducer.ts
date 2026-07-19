@@ -1,4 +1,4 @@
-import type { GroundedPoi, PlanItem, TransportMode, TransportPrefs, TripPlan } from "@/lib/pipeline/types";
+import type { GroundedPoi, PlanItem, PoiType, TransportMode, TransportPrefs, TripPlan } from "@/lib/pipeline/types";
 import { nanoid } from "nanoid";
 import {
   addEmptyDay,
@@ -24,7 +24,7 @@ export type WorkbenchIntent =
   | { type: "reorder-day"; day: number; orderedItemIds: string[] }
   | { type: "move-day-item"; fromDay: number; toDay: number; itemId: string; toIndex?: number }
   | { type: "return-item-to-pool"; day: number; itemId: string }
-  | { type: "edit-item"; day: number; itemId: string; set: { note?: string; startTime?: string; durationMin?: number } }
+  | { type: "edit-item"; day?: number; itemId: string; set: { note?: string; startTime?: string; durationMin?: number; type?: PoiType } }
   | { type: "add-day"; theme?: string }
   | { type: "remove-day"; day: number }
   | { type: "set-day-theme"; day: number; theme: string }
@@ -76,7 +76,9 @@ export function applyIntent(plan: TripPlan, intent: WorkbenchIntent): { optimist
       }
       case "edit-item": {
         if (Object.keys(intent.set).length === 0) throw new Error("set 至少提供一个字段");
-        const found = findItem(dayAt(optimisticPlan, intent.day).items, intent.itemId);
+        // day 省略 = 改待安排池里的地点
+        const items = intent.day === undefined ? optimisticPlan.pool : dayAt(optimisticPlan, intent.day).items;
+        const found = findItem(items, intent.itemId);
         if (!found) throw new Error("itemId 不存在");
         Object.assign(found.item, intent.set);
         return { optimisticPlan, patchBody: { op: "update-item", day: intent.day, itemId: intent.itemId, set: intent.set } };

@@ -8,6 +8,8 @@ export type AmapPoi = {
   cityName?: string;
   openHours?: string;
   rating?: string;
+  /** 高德分类编码(6 位,前 2 位为大类);经 poiTypeFromAmap 映射成我们的 6 类 */
+  typecode?: string;
 };
 
 export interface MapProvider {
