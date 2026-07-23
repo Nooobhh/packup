@@ -6,6 +6,7 @@
 
 ## [Unreleased]
 ### Added
+- 新增可选全站 Basic Auth(`PACKUP_BASIC_AUTH`):自部署公网裸端口时防扫描与防蹭 LLM 额度,不设则行为不变
 - 新增 pptoken 中转站 provider(OpenAI 兼容,gpt-5.6 系列):支持笔记图片识图提取与按任务轻重的推理力度分档
 - 全站设计语言落定 Sparkles 风(暖白留白+胖衬线+涂鸦贴纸),权威规范见 docs/DESIGN.md;贴纸素材 AI 生成走抠图管线落 public/stickers/
 - 地点详情抽屉展示来源笔记的本地缓存图片(新增图片 serve API)

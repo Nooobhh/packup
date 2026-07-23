@@ -7,7 +7,7 @@ npm install
 cp .env.example .env.local   # 填 AMAP_REST_KEY / NEXT_PUBLIC_AMAP_JS_KEY（高德开放平台）
 npm run dev                  # http://localhost:3000
 ```
-运行前提：配 `PACKUP_PPTOKEN_API_KEY`（parse-query / extract / plan 三段走 pptoken 中转站调 gpt-5.6，OpenAI 兼容 API）。DeepSeek / 本机 `claude` CLI 为备用 provider，默认不需要。当前为自用版，不部署公网。
+运行前提：配 `PACKUP_PPTOKEN_API_KEY`（parse-query / extract / plan 三段走 pptoken 中转站调 gpt-5.6，OpenAI 兼容 API）。DeepSeek / 本机 `claude` CLI 为备用 provider，默认不需要。当前为自用版；自部署公网裸端口时设 `PACKUP_BASIC_AUTH="用户名:密码"` 启用全站 Basic Auth（不设则无鉴权，本地开发默认关）。
 
 ## 架构
 两段式管线，段间 zod 契约衔接，中间产物落盘（`data/trips/<id>/`）可断点续跑：
