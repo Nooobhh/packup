@@ -2,7 +2,7 @@
 
 格式: [Keep a Changelog 1.1.0](https://keepachangelog.com/zh-CN/1.1.0/)
 版本号: [SemVer 2.0.0](https://semver.org/lang/zh-CN/)
-写作风格: 单条目一行 ≤ 200 字符 + 视角面向消费者（详见 hazeflow/_shared/versioning.md）
+写作风格: 单条目一行 ≤ 200 字符 + 视角面向消费者
 
 ## [Unreleased]
 ### Added
