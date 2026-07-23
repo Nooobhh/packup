@@ -7,7 +7,7 @@
 - 类型: 发行产品
 - 集群归属: 未分类（待归类）
 - 状态: active
-- 版本: 0.4.1
+- 版本: 0.5.0
 
 ## Agent 行为约定
 - 继承全局 ~/CLAUDE.md 编码原则
@@ -30,5 +30,6 @@
 - LLM = 路由（`router.ts`）：三段全走 pptoken 中转（gpt-5.6 多模态，`PACKUP_PPTOKEN_API_KEY`）；deepseek / claude-cli 留作备用 provider
 - 地图 = 高德：服务端 REST（`AMAP_REST_KEY`）+ 前端 JS SDK（`NEXT_PUBLIC_AMAP_JS_KEY`），`.env.local` 配置
 - 小红书获取 = 免登录裸 HTTP 主路径（分享链接自带 xsec_token）；`PACKUP_FETCHER=cli` 切 xhs-cli 备选
+- 访问保护 = 可选全站 Basic Auth：根 `middleware.ts` 读 `PACKUP_BASIC_AUTH`("用户名:密码")，不设则放行（本地开发默认关）
 
 <!-- 本文件只记 agent 指令。进度 / 待办 / bug → ROADMAP.md；版本变更 → CHANGELOG.md -->

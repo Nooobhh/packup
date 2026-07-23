@@ -5,7 +5,10 @@
 写作风格: 单条目一行 ≤ 200 字符 + 视角面向消费者
 
 ## [Unreleased]
+
+## [0.5.0] - 2026-07-22 — LLM 换轨 pptoken gpt-5.6（三段全切、识图直连）+ 待计划池与营业信息修复
 ### Added
+- 代码库公开发布至 GitHub(Nooobhh/packup);内部工作文档 docs/ 不再随库分发
 - 新增可选全站 Basic Auth(`PACKUP_BASIC_AUTH`):自部署公网裸端口时防扫描与防蹭 LLM 额度,不设则行为不变
 - 新增 pptoken 中转站 provider(OpenAI 兼容,gpt-5.6 系列):支持笔记图片识图提取与按任务轻重的推理力度分档
 - 全站设计语言落定 Sparkles 风(暖白留白+胖衬线+涂鸦贴纸),权威规范见 docs/DESIGN.md;贴纸素材 AI 生成走抠图管线落 public/stickers/
